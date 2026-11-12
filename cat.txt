@@ -1,0 +1,3023 @@
+aw--[[
+    kawaii.gg
+    LinuxHub core (ragebot / legit / visuals / configs)
+    mounted on the Sleepy Hub UI library, kawaii skin
+
+    - window background image, transparent panels
+    - RightShift toggles the menu
+    - logic core untouched (Combat closure breakout required for the
+      UI callbacks to reach startMethod/stopMethod/Bait/etc.)
+]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player    = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui", 10) or player:FindFirstChildOfClass("PlayerGui")
+
+local function log(fmt, ...) print(("[kawaii.gg] " .. fmt):format(...)) end
+
+-- kill a previous run before building the next
+if _G.KawaiiDestroy then pcall(_G.KawaiiDestroy) end
+
+---------------------------------------------------------------------
+-- INSTANCE HELPERS (HUD uses these)
+---------------------------------------------------------------------
+local function new(class, props, children)
+	local inst = Instance.new(class)
+	local parent
+	for k, v in pairs(props or {}) do
+		if k == "Parent" then
+			parent = v
+		else
+			inst[k] = v
+		end
+	end
+	for _, child in ipairs(children or {}) do
+		child.Parent = inst
+	end
+	inst.Parent = parent
+	return inst
+end
+
+local function corner(inst, radius)
+	return new("UICorner", { CornerRadius = UDim.new(0, radius or 8), Parent = inst })
+end
+
+local function stroke(inst, color, thickness)
+	return new("UIStroke", {
+		Color = color or Theme.Stroke,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Parent = inst,
+	})
+end
+
+local function text(parent, str, size, color, font, props)
+	local label = new("TextLabel", {
+		BackgroundTransparency = 1,
+		Text = str,
+		TextSize = size or 14,
+		TextColor3 = color or Theme.Text,
+		Font = font or Theme.Font,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Parent = parent,
+	})
+	for k, v in pairs(props or {}) do
+		label[k] = v
+	end
+	return label
+end
+
+local function createPenguin(parent)
+	local root = new("Frame", {
+		Name = "Penguin",
+		Size = UDim2.fromOffset(26, 26),
+		BackgroundTransparency = 1,
+		Parent = parent,
+	})
+	local function part(color, x, y, w, h)
+		local f = new("Frame", {
+			Position = UDim2.fromOffset(x, y),
+			Size = UDim2.fromOffset(w, h),
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+			Parent = root,
+		})
+		new("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = f })
+		return f
+	end
+	local orange = Color3.fromRGB(255, 176, 36)
+	local black = Color3.fromRGB(28, 28, 34)
+	local white = Color3.fromRGB(245, 245, 250)
+	part(orange, 2, 22, 9, 4)
+	part(orange, 15, 22, 9, 4)
+	part(black, 3, 0, 20, 24)
+	part(white, 7, 9, 12, 14)
+	part(white, 7, 4, 5, 5)
+	part(white, 14, 4, 5, 5)
+	part(black, 9, 6, 2, 2)
+	part(black, 15, 6, 2, 2)
+	part(orange, 10, 9, 6, 3)
+	return root
+end
+
+local Theme = {
+	Accent = Color3.fromRGB(255, 133, 189),
+	Text = Color3.fromRGB(240, 240, 248),
+	SubText = Color3.fromRGB(150, 150, 172),
+	Stroke = Color3.fromRGB(60, 60, 80),
+	Font = Enum.Font.GothamMedium,
+	FontBold = Enum.Font.GothamBold,
+}
+
+---------------------------------------------------------------------
+-- KAWAII UI SETTINGS
+---------------------------------------------------------------------
+local ACCENT     = Color3.fromRGB(255, 133, 189)
+local OLD_ACCENT = Color3.fromRGB(155, 150, 219) -- library default purple
+
+local MENU_KEY           = Enum.KeyCode.RightShift
+local ALSO_LEFT_SHIFT    = false
+local SHOW_TOGGLE_BUTTON = false -- true = bring back the floating button
+
+local ASSET = {
+	url = "https://raw.githubusercontent.com/betinkapro/some-shit-so-my-thing-works/refs/heads/main/31630-removebg-preview.png",
+	dir = "kawaii.gg/assets",
+
+	mode = "window",
+	fit  = "contain",
+
+	coverage = 0.96,
+	anchor_y = 0.5,
+
+	base_color = Color3.fromRGB(12, 12, 16),
+	scrim      = 0.35,
+	img_alpha  = 0,
+
+	panel_alpha  = 0.78,
+	button_alpha = 0.45,
+	panel_area   = 12000,
+
+	force_redownload = false,
+}
+
+local uiConns = {}
+local function track(conn)
+	table.insert(uiConns, conn)
+	return conn
+end
+
+---------------------------------------------------------------------
+-- UI LIBRARY
+---------------------------------------------------------------------
+local okLib, lib = pcall(function()
+	return loadstring(game:HttpGet(
+		"https://raw.githubusercontent.com/yenkgg/Sleepy-Hub-UI/refs/heads/main/Library.lua"
+	))()
+end)
+if not okLib or not lib then
+	warn("[kawaii.gg] UI library failed to load: " .. tostring(lib))
+	return
+end
+local Library = lib
+
+local window = Library:window({
+	name     = "kawaii",
+	suffix   = "gg",
+	gameInfo = "kawaii.gg",
+})
+
+pcall(function() Library:update_theme("accent", ACCENT) end)
+pcall(function() window:update_theme("accent", ACCENT) end)
+
+local function recolorAccent(old, new)
+	local props = { "BackgroundColor3", "TextColor3", "ImageColor3", "ScrollBarImageColor3" }
+
+	local function sweep(root)
+		if not root then return end
+		for _, d in ipairs(root:GetDescendants()) do
+			for _, p in ipairs(props) do
+				local ok, val = pcall(function() return d[p] end)
+				if ok and typeof(val) == "Color3" and val == old then
+					pcall(function() d[p] = new end)
+				end
+			end
+			if d:IsA("UIStroke") then
+				local ok, val = pcall(function() return d.Color end)
+				if ok and typeof(val) == "Color3" and val == old then
+					pcall(function() d.Color = new end)
+				end
+			end
+		end
+	end
+
+	sweep(Library["items"])
+	sweep(Library["other"])
+end
+
+recolorAccent(OLD_ACCENT, ACCENT)
+
+---------------------------------------------------------------------
+-- MAIN FRAME
+---------------------------------------------------------------------
+local itemsGui = Library["items"] or (getgenv().library and getgenv().library["items"])
+if not itemsGui then
+	warn("[kawaii.gg] Library['items'] missing - library failed to load")
+	return
+end
+
+local win
+for _ = 1, 30 do
+	local bestArea = -1
+	for _, ch in ipairs(itemsGui:GetChildren()) do
+		if ch:IsA("Frame") then
+			local a = ch.Size.X.Offset * ch.Size.Y.Offset
+			if a > bestArea then win, bestArea = ch, a end
+		end
+	end
+	if win and #win:GetChildren() > 3 then break end
+	task.wait(0.1)
+end
+if not win then
+	warn("[kawaii.gg] main frame not found")
+	return
+end
+
+itemsGui.Enabled        = true
+itemsGui.IgnoreGuiInset = true
+itemsGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+local function layoutWindow()
+	local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+		or Vector2.new(1280, 720)
+
+	local w = math.clamp(math.floor(vp.X * 0.92), 320, 700)
+	local h = math.clamp(math.floor(vp.Y * 0.78), 320, 565)
+
+	win.AnchorPoint = Vector2.new(0, 0)
+	win.Size        = UDim2.fromOffset(w, h)
+	win.Position    = UDim2.fromOffset(
+		math.floor((vp.X - w) / 2),
+		math.floor((vp.Y - h) / 2)
+	)
+	win.Visible = true
+end
+
+---------------------------------------------------------------------
+-- BACKGROUND DOWNLOAD
+---------------------------------------------------------------------
+local PNG_SIG = string.char(137, 80, 78, 71, 13, 10, 26, 10)
+
+local function httpGet(url)
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if ok and type(body) == "string" and #body > 0 then return body, "HttpGet" end
+
+	if syn and syn.request then
+		local ok2, r = pcall(syn.request, { Url = url, Method = "GET" })
+		if ok2 and r and r.StatusCode == 200 and type(r.Body) == "string" then
+			return r.Body, "syn.request"
+		end
+	end
+	if request then
+		local ok2, r = pcall(request, { Url = url, Method = "GET" })
+		if ok2 and r and r.StatusCode == 200 and type(r.Body) == "string" then
+			return r.Body, "request"
+		end
+	end
+	if http and http.request then
+		local ok2, r = pcall(http.request, { Url = url, Method = "GET" })
+		if ok2 and r and r.StatusCode == 200 and type(r.Body) == "string" then
+			return r.Body, "http.request"
+		end
+	end
+end
+
+local function pngSize(body)
+	if #body < 24 or body:sub(1, 8) ~= PNG_SIG then return nil end
+	local w = body:byte(17) * 16777216 + body:byte(18) * 65536
+			+ body:byte(19) * 256 + body:byte(20)
+	local h = body:byte(21) * 16777216 + body:byte(22) * 65536
+			+ body:byte(23) * 256 + body:byte(24)
+	if w <= 0 or h <= 0 or w > 20000 or h > 20000 then return nil end
+	return w, h
+end
+
+local function contentTag(s)
+	local h = 5381
+	for i = 1, #s do h = (h * 33 + s:byte(i)) % 2147483647 end
+	return string.format("%08x", h)
+end
+
+local imgW, imgH
+
+local function downloadBackground()
+	local body, via = httpGet(ASSET.url)
+	if not body then return nil, "HTTP failed (no HttpGet/request)" end
+	log("HTTP ok via %s, %d B", tostring(via), #body)
+
+	if body:sub(1, 8) ~= PNG_SIG then
+		return nil, ("not a PNG (starts with: %s)"):format(body:sub(1, 60):gsub("[%c]", "?"))
+	end
+
+	local w, h = pngSize(body)
+	if w then
+		imgW, imgH = w, h
+		log("image size: %dx%d (aspect %.3f)", w, h, w / h)
+	else
+		log("could not read PNG dimensions - 16:9 fallback")
+		imgW, imgH = 16, 9
+	end
+
+	for _, f in ipairs({ ASSET.dir, "kawaii.gg" }) do pcall(makefolder, f) end
+
+	local path = ("%s/bg_%s.png"):format(ASSET.dir, contentTag(body))
+	if not ASSET.force_redownload and isfile(path) then
+		log("disk cache: %s", path)
+		return path
+	end
+
+	local okW, err = pcall(writefile, path, body)
+	if not okW then return nil, "writefile failed: " .. tostring(err) end
+	log("wrote: %s (%d B)", path, #body)
+	return path
+end
+
+local function resolveCustom(path)
+	for _ = 1, 10 do
+		local ok, asset = pcall(getcustomasset, path)
+		if ok and type(asset) == "string" and #asset > 0 then return asset end
+		task.wait(0.2)
+	end
+end
+
+---------------------------------------------------------------------
+-- PANEL TRANSPARENCY
+---------------------------------------------------------------------
+local function inBackground(d)
+	local p = d
+	while p do
+		if p.Name == "KawaiiBackgroundHolder" or p.Name == "KawaiiScreenLayer" then
+			return true
+		end
+		p = p.Parent
+	end
+	return false
+end
+
+local function applyPanels()
+	for _, d in ipairs(win:GetDescendants()) do
+		if (d:IsA("Frame") or d:IsA("ImageButton") or d:IsA("TextButton"))
+			and not inBackground(d) then
+			local size = d.AbsoluteSize
+			if size.X > 0 and size.Y > 0 then
+				local area = size.X * size.Y
+				if area >= ASSET.panel_area then
+					if d.BackgroundTransparency < ASSET.panel_alpha then
+						d.BackgroundTransparency = ASSET.panel_alpha
+					end
+				else
+					if d.BackgroundTransparency < ASSET.button_alpha then
+						d.BackgroundTransparency = ASSET.button_alpha
+					end
+				end
+			end
+		end
+	end
+end
+
+local function keepPanelsTransparent()
+	applyPanels()
+	local t0 = os.clock()
+	local conn
+	conn = track(RunService.Heartbeat:Connect(function()
+		if os.clock() - t0 > 20 then conn:Disconnect() return end
+		applyPanels()
+	end))
+	track(win.DescendantAdded:Connect(function()
+		task.delay(0.3, applyPanels)
+	end))
+end
+
+---------------------------------------------------------------------
+-- BACKGROUND PLACEMENT
+---------------------------------------------------------------------
+local bgLabel, bgHolder
+
+local function layoutImage()
+	if not bgLabel then return end
+
+	local W = win.AbsoluteSize.X * ASSET.coverage
+	local H = win.AbsoluteSize.Y * ASSET.coverage
+	if W <= 1 or H <= 1 then return end
+
+	if ASSET.fit == "cover" then
+		bgLabel.Size        = UDim2.fromScale(ASSET.coverage, ASSET.coverage)
+		bgLabel.Position    = UDim2.fromScale(0.5, ASSET.anchor_y)
+		bgLabel.AnchorPoint = Vector2.new(0.5, ASSET.anchor_y)
+		bgLabel.ScaleType   = Enum.ScaleType.Crop
+		return
+	end
+
+	local aspect = imgW / imgH
+	local dispW, dispH
+	if W / H > aspect then
+		dispH = H
+		dispW = H * aspect
+	else
+		dispW = W
+		dispH = W / aspect
+	end
+
+	bgLabel.ScaleType   = Enum.ScaleType.Fit
+	bgLabel.AnchorPoint = Vector2.new(0.5, ASSET.anchor_y)
+	bgLabel.Position    = UDim2.fromScale(0.5, ASSET.anchor_y)
+	bgLabel.Size        = UDim2.fromOffset(math.floor(dispW), math.floor(dispH))
+end
+
+task.spawn(function()
+	for _, n in ipairs({ "KawaiiBackgroundHolder", "KawaiiScreenLayer" }) do
+		local a = win:FindFirstChild(n)
+		if a then a:Destroy() end
+		local b = itemsGui:FindFirstChild(n)
+		if b then b:Destroy() end
+	end
+
+	win.BackgroundTransparency = 1
+
+	RunService.Heartbeat:Wait()
+	RunService.Heartbeat:Wait()
+	layoutWindow()
+	log("window: %s @ %s", tostring(win.Size), tostring(win.Position))
+
+	local path, err = downloadBackground()
+	if not path then
+		warn("[kawaii.gg] background download failed: " .. tostring(err))
+		keepPanelsTransparent()
+		return
+	end
+
+	local asset = resolveCustom(path)
+	if not asset then
+		warn("[kawaii.gg] getcustomasset failed for " .. path)
+		keepPanelsTransparent()
+		return
+	end
+	log("asset: %s", asset)
+
+	bgHolder = Instance.new("Frame")
+	bgHolder.Name                   = "KawaiiBackgroundHolder"
+	bgHolder.ZIndex                 = 0
+	bgHolder.Size                   = UDim2.fromScale(1, 1)
+	bgHolder.Position               = UDim2.fromScale(0, 0)
+	bgHolder.BackgroundTransparency = 1
+	bgHolder.BorderSizePixel        = 0
+	bgHolder.ClipsDescendants       = true
+	bgHolder.Active                 = false
+	bgHolder.Parent                 = win
+
+	local hc = Instance.new("UICorner")
+	hc.CornerRadius = UDim.new(0, 10)
+	hc.Parent = bgHolder
+
+	local base = Instance.new("Frame")
+	base.Name                   = "KawaiiBase"
+	base.Size                   = UDim2.fromScale(1, 1)
+	base.Position               = UDim2.fromScale(0, 0)
+	base.BackgroundColor3       = ASSET.base_color
+	base.BackgroundTransparency = 0
+	base.BorderSizePixel        = 0
+	base.ZIndex                 = 0
+	base.Parent                 = bgHolder
+
+	bgLabel = Instance.new("ImageLabel")
+	bgLabel.Name                   = "KawaiiBackground"
+	bgLabel.Image                  = asset
+	bgLabel.BackgroundTransparency = 1
+	bgLabel.BorderSizePixel        = 0
+	bgLabel.ImageTransparency      = ASSET.img_alpha
+	bgLabel.ZIndex                 = 0
+	bgLabel.Parent                 = bgHolder
+
+	if ASSET.scrim > 0 then
+		local scrim = Instance.new("Frame")
+		scrim.Name                   = "KawaiiScrim"
+		scrim.Size                   = UDim2.fromScale(1, 1)
+		scrim.Position               = UDim2.fromScale(0, 0)
+		scrim.BackgroundColor3       = Color3.fromRGB(0, 0, 0)
+		scrim.BackgroundTransparency = ASSET.scrim
+		scrim.BorderSizePixel        = 0
+		scrim.ZIndex                 = 0
+		scrim.Parent                 = bgHolder
+	end
+
+	layoutImage()
+
+	track(win:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutImage))
+	if workspace.CurrentCamera then
+		track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			task.wait(0.2)
+			layoutWindow()
+			layoutImage()
+		end))
+	end
+
+	for _ = 1, 40 do
+		if bgLabel.IsLoaded then break end
+		task.wait(0.1)
+	end
+	log("IsLoaded=%s label=%s window=%s",
+		tostring(bgLabel.IsLoaded), tostring(bgLabel.AbsoluteSize), tostring(win.AbsoluteSize))
+	if not bgLabel.IsLoaded then
+		warn("[kawaii.gg] image did not decode - try ASSET.force_redownload = true")
+	end
+
+	task.wait(0.3)
+	keepPanelsTransparent()
+	log("background placed inside window, panels transparent")
+end)
+
+---------------------------------------------------------------------
+-- MENU TOGGLE
+---------------------------------------------------------------------
+local menuOpen = true
+local toggleButton
+
+local function setMenu(open)
+	open = not not open
+	if open == menuOpen then return end
+	menuOpen = open
+
+	itemsGui.Enabled = open
+	if win then win.Visible = open end
+
+	if toggleButton then
+		toggleButton.BackgroundColor3 = open
+			and ACCENT
+			or  Color3.fromRGB(70, 70, 78)
+		toggleButton.Text = open and "kawaii.gg" or "kawaii.gg (off)"
+	end
+end
+
+local function toggleMenu() setMenu(not menuOpen) end
+
+local rawToggle = window.toggle_menu
+window.toggle_menu = function(bool)
+	if bool == nil then toggleMenu() else setMenu(bool) end
+end
+
+track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.KeyCode ~= MENU_KEY then
+		if not (ALSO_LEFT_SHIFT and input.KeyCode == Enum.KeyCode.LeftShift) then
+			return
+		end
+	end
+
+	if UserInputService:GetFocusedTextBox() then return end -- typing a config name
+
+	toggleMenu()
+end))
+
+track(itemsGui:GetPropertyChangedSignal("Enabled"):Connect(function()
+	if itemsGui.Enabled ~= menuOpen then
+		menuOpen = itemsGui.Enabled
+		if win then win.Visible = menuOpen end
+	end
+end))
+
+if SHOW_TOGGLE_BUTTON then
+	local toggle_gui = Instance.new("ScreenGui")
+	toggle_gui.Name           = "KawaiiToggleOverlay"
+	toggle_gui.ResetOnSpawn   = false
+	toggle_gui.IgnoreGuiInset = true
+	toggle_gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+	toggle_gui.DisplayOrder   = 99999
+
+	local okCG = pcall(function() toggle_gui.Parent = game:GetService("CoreGui") end)
+	if not okCG or not toggle_gui.Parent then toggle_gui.Parent = playerGui end
+
+	toggleButton = Instance.new("TextButton")
+	toggleButton.Name                   = "ToggleUIButton"
+	toggleButton.Size                   = UDim2.fromOffset(120, 38)
+	toggleButton.Position               = UDim2.fromOffset(16, 16)
+	toggleButton.BackgroundColor3       = ACCENT
+	toggleButton.BackgroundTransparency = 0.15
+	toggleButton.BorderSizePixel        = 0
+	toggleButton.Text                   = "kawaii.gg"
+	toggleButton.TextColor3             = Color3.fromRGB(255, 255, 255)
+	toggleButton.TextSize               = 15
+	toggleButton.Font                   = Enum.Font.GothamBold
+	toggleButton.AutoButtonColor        = false
+	toggleButton.Active                 = true
+	toggleButton.Draggable              = true
+	toggleButton.Parent                 = toggle_gui
+
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 9)
+	c.Parent = toggleButton
+
+	toggleButton.Activated:Connect(toggleMenu)
+end
+
+---------------------------------------------------------------------
+-- NOTIFY SHIM
+---------------------------------------------------------------------
+local function khubNotify(title, info)
+	pcall(function()
+		Library.notifications:create_notification({
+			name     = tostring(title or "kawaii.gg"),
+			info     = tostring(info or ""),
+			lifetime = 3,
+		})
+	end)
+end
+
+---------------------------------------------------------------------
+-- STATE
+---------------------------------------------------------------------
+local State = {
+	Ragebot = false,
+	Method = "Underground",
+	Depth = 8,
+	UndergroundRange = 4,
+	UndergroundSpeed = 30,
+	HitboxSmaller = false,
+	FakePosition = false,
+	FastShoot = false,
+	UE_Y = 500,
+	UE_Cooldown = 0.2,
+	BaitDistance = 30,
+	ClassicOffset = 0,
+	ClassicTeamCheck = true,
+	ClassicMode = "Default",
+	ClassicOrbitSpeed = 220,
+	ClassicBackstabRate = 0.15,
+	VoidDistance = 50000,
+	PrimaryFix = false,
+	PrimaryReaction = 0.03,
+	Voidspam = false,
+	VoidTime = 1,
+	VoidHomeTime = 1,
+}
+
+local Flags = {}
+local Connections = {}
+local originalHipHeight = 2
+local originalRootSize = Vector3.new(2, 2, 1)
+local lastUndergroundPos = nil
+local direction = 1
+local fakePart = nil
+local fakeConn = nil
+local fakeOffsetY = 12
+
+local function getCharacter()
+	return player.Character
+end
+
+local function getRoot(char)
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid(char)
+	return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function clearConnections()
+	for _, c in ipairs(Connections) do
+		if typeof(c) == "RBXScriptConnection" then
+			c:Disconnect()
+		end
+	end
+	table.clear(Connections)
+end
+
+local function claimOwnership(root)
+	if not root then return end
+	pcall(function()
+		if not root.Anchored then
+			root:SetNetworkOwner(player)
+		end
+	end)
+end
+
+---------------------------------------------------------------------
+-- COMBAT (shared targeting + fire helpers)
+---------------------------------------------------------------------
+local Combat = (function()
+	local M = {}
+
+	function M.Click()
+		if typeof(mouse1click) == "function" then
+			if pcall(mouse1click) then return true end
+		end
+		if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
+			local ok = pcall(function()
+				mouse1press()
+				task.wait()
+				mouse1release()
+			end)
+			if ok then return true end
+		end
+		if not M._warned then
+			M._warned = true
+			warn("[kawaii.gg] This executor exposes no mouse1click/mouse1press, auto-fire can't simulate a click")
+		end
+		return false
+	end
+
+	function M.Click2()
+		if typeof(mouse2click) == "function" then
+			if pcall(mouse2click) then return true end
+		end
+		if typeof(mouse2press) == "function" and typeof(mouse2release) == "function" then
+			local ok = pcall(function()
+				mouse2press()
+				task.wait()
+				mouse2release()
+			end)
+			if ok then return true end
+		end
+		if not M._warned2 then
+			M._warned2 = true
+			warn("[kawaii.gg] This executor exposes no mouse2click/mouse2press, right-click spam can't simulate a click")
+		end
+		return false
+	end
+
+	local function aliveRoot(plr)
+		local char = plr.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		if not hum or not root or hum.Health <= 0 then return nil end
+		if not (root.Position.Magnitude < 1e9) then return nil end
+		return root
+	end
+	M.AliveRoot = aliveRoot
+
+	local function enemies(teamCheck)
+		local list = {}
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player and not (teamCheck and plr.Team ~= nil and plr.Team == player.Team) then
+				local root = aliveRoot(plr)
+				if root then table.insert(list, { player = plr, root = root }) end
+			end
+		end
+		return list
+	end
+	M.Enemies = enemies
+
+	local visParams = RaycastParams.new()
+	visParams.FilterType = Enum.RaycastFilterType.Exclude
+	visParams.RespectCanCollide = true
+
+	function M.IsVisible(targetRoot, fromPos)
+		local char = getCharacter()
+		visParams.FilterDescendantsInstances = { char, targetRoot.Parent }
+		local hit = workspace:Raycast(fromPos, targetRoot.Position - fromPos, visParams)
+		return hit == nil
+	end
+
+	local crossParams = RaycastParams.new()
+	crossParams.FilterType = Enum.RaycastFilterType.Exclude
+	crossParams.RespectCanCollide = true
+
+	function M.CrosshairTarget(maxDist, teamCheck)
+		local cam = workspace.CurrentCamera
+		local char = getCharacter()
+		if not cam or not char then return nil end
+		crossParams.FilterDescendantsInstances = { char }
+		local hit = workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * (maxDist or 1000), crossParams)
+		if not hit then return nil end
+		local model = hit.Instance:FindFirstAncestorOfClass("Model")
+		local plr = model and Players:GetPlayerFromCharacter(model)
+		if not plr or plr == player then return nil end
+		if teamCheck and plr.Team ~= nil and plr.Team == player.Team then return nil end
+		local root = aliveRoot(plr)
+		if not root then return nil end
+		return plr, root
+	end
+
+	function M.FovTarget(fovDeg, teamCheck, visibleOnly)
+		local cam = workspace.CurrentCamera
+		if not cam then return nil end
+		local look, camPos = cam.CFrame.LookVector, cam.CFrame.Position
+		local cosLimit = math.cos(math.rad(fovDeg))
+		local best, bestDot
+		for _, e in ipairs(enemies(teamCheck)) do
+			local dot = look:Dot((e.root.Position - camPos).Unit)
+			if dot >= cosLimit and (not visibleOnly or M.IsVisible(e.root, camPos)) then
+				if not bestDot or dot > bestDot then best, bestDot = e, dot end
+			end
+		end
+		return best
+	end
+
+	return M
+end)()
+
+---------------------------------------------------------------------
+-- VOID GATE
+---------------------------------------------------------------------
+local MAX_VOID_DIST = 100000
+local VoidGate = { phase = "home", t0 = 0, base = nil }
+local voidGateConn = nil
+
+local function voidGateSuspends()
+	return State.Ragebot and State.Voidspam and VoidGate.phase == "spam"
+end
+
+local function voidGateStep()
+	if not State.Ragebot or not State.Voidspam then return end
+	local now = os.clock()
+	if VoidGate.phase == "spam" then
+		if now - VoidGate.t0 >= State.VoidTime then
+			VoidGate.phase = "home"
+			VoidGate.t0 = now
+			VoidGate.base = nil
+			return
+		end
+		local char = getCharacter()
+		local root, hum = getRoot(char), getHumanoid(char)
+		if not root or not hum or hum.Health <= 0 then return end
+		if not VoidGate.base then VoidGate.base = root.Position end
+		local fh = workspace.FallenPartsDestroyHeight
+		if fh ~= fh then fh = -500 end
+		local y = math.max(VoidGate.base.Y, fh + 25)
+		local ang = math.random() * math.pi * 2
+		local dist = math.min(State.VoidDistance, MAX_VOID_DIST) * (0.7 + math.random() * 0.3)
+		root.CFrame = CFrame.new(VoidGate.base.X + math.cos(ang) * dist, y, VoidGate.base.Z + math.sin(ang) * dist)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	else
+		if now - VoidGate.t0 >= State.VoidHomeTime then
+			VoidGate.phase = "spam"
+			VoidGate.t0 = now
+			VoidGate.base = nil
+		end
+	end
+end
+
+local function startVoidGate()
+	if voidGateConn then return end
+	VoidGate.phase = "spam"
+	VoidGate.t0 = os.clock()
+	VoidGate.base = nil
+	voidGateConn = RunService.Heartbeat:Connect(voidGateStep)
+end
+
+local function stopVoidGate()
+	if voidGateConn then
+		voidGateConn:Disconnect()
+		voidGateConn = nil
+	end
+	VoidGate.phase = "home"
+	VoidGate.base = nil
+end
+
+---------------------------------------------------------------------
+-- UNDERGROUND
+---------------------------------------------------------------------
+local undergroundActive = false
+
+local function startUnderground()
+	if undergroundActive then return end
+	clearConnections()
+	local char = getCharacter()
+	local root = getRoot(char)
+	local hum = getHumanoid(char)
+	if not root or not hum then return end
+	claimOwnership(root)
+
+	if originalHipHeight == 2 then originalHipHeight = hum.HipHeight end
+	if originalRootSize == Vector3.new(2, 2, 1) then originalRootSize = root.Size end
+
+	undergroundActive = true
+	lastUndergroundPos = root.Position
+	direction = 1
+	root.CanCollide = false
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then part.CanCollide = false end
+	end
+
+	local anchor = lastUndergroundPos
+	local side = 1
+	local acc = 0
+	local function step(dt)
+		if not State.Ragebot or State.Method ~= "Underground" then return end
+		if voidGateSuspends() then return end
+		char = getCharacter()
+		root = getRoot(char)
+		hum = getHumanoid(char)
+		if not root or not hum or hum.Health <= 0 then return end
+
+		local fh = workspace.FallenPartsDestroyHeight
+		if fh ~= fh then fh = -500 end
+		local y = math.max(anchor.Y - State.Depth, fh + 25)
+
+		acc = acc + (dt or 0)
+		local interval = 1 / math.max(State.UndergroundSpeed, 1)
+		if acc >= interval then
+			acc = acc % interval
+			side = -side
+		end
+		local pos = Vector3.new(anchor.X + side * State.UndergroundRange, y, anchor.Z)
+		root.CFrame = CFrame.new(pos) * CFrame.Angles(0, math.rad(root.Orientation.Y), 0)
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+		hum.PlatformStand = true
+	end
+	table.insert(Connections, RunService.Heartbeat:Connect(step))
+end
+
+local function stopUnderground()
+	if not undergroundActive then return end
+	undergroundActive = false
+	clearConnections()
+	local char = getCharacter()
+	local root = getRoot(char)
+	local hum = getHumanoid(char)
+	if root then
+		root.CanCollide = true
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = true end
+		end
+		if lastUndergroundPos then
+			root.CFrame = CFrame.new(lastUndergroundPos.X, lastUndergroundPos.Y + 2, lastUndergroundPos.Z)
+		end
+	end
+	if hum then
+		hum.PlatformStand = State.HitboxSmaller
+		if not State.HitboxSmaller then hum.HipHeight = originalHipHeight end
+	end
+end
+
+---------------------------------------------------------------------
+-- UE COUNTER
+---------------------------------------------------------------------
+local ueToken = 0
+local ueHome = nil
+
+local function startUECounter()
+	clearConnections()
+	ueToken += 1
+	ueHome = nil
+	local token = ueToken
+	task.spawn(function()
+		while token == ueToken and State.Ragebot and State.Method == "UE Counter" do
+			local root = getRoot(getCharacter())
+			local hum = getHumanoid(getCharacter())
+			if root and hum and hum.Health > 0 and not voidGateSuspends() then
+				local home = root.CFrame
+				ueHome = home
+				root.CFrame = home + Vector3.new(0, State.UE_Y, 0)
+				root.AssemblyLinearVelocity = Vector3.zero
+				task.wait(State.UE_Cooldown)
+				if token == ueToken and root.Parent and hum.Health > 0 then
+					root.CFrame = home
+					root.AssemblyLinearVelocity = Vector3.zero
+				end
+				ueHome = nil
+			end
+			task.wait(State.UE_Cooldown)
+		end
+	end)
+end
+
+local function stopUECounter()
+	ueToken += 1
+	local root = getRoot(getCharacter())
+	if ueHome and root then root.CFrame = ueHome end
+	ueHome = nil
+end
+
+---------------------------------------------------------------------
+-- HITBOX SMALLER
+---------------------------------------------------------------------
+local function applyHitboxSmaller(enabled)
+	local char = getCharacter()
+	local root = getRoot(char)
+	local hum = getHumanoid(char)
+	if not root or not hum then return end
+	if enabled then
+		originalHipHeight = hum.HipHeight
+		originalRootSize = root.Size
+		hum.HipHeight = 0.1
+		root.Size = Vector3.new(2, 0.4, 1)
+		local torso = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+		if torso then
+			torso.CFrame = torso.CFrame * CFrame.Angles(math.rad(90), 0, 0)
+		end
+		hum.PlatformStand = true
+	else
+		hum.HipHeight = originalHipHeight
+		root.Size = originalRootSize
+		hum.PlatformStand = false
+		root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, math.rad(root.Orientation.Y), 0)
+	end
+end
+
+---------------------------------------------------------------------
+-- FAKE POSITION
+---------------------------------------------------------------------
+local function startFakePosition()
+	local char = getCharacter()
+	local root = getRoot(char)
+	if not root then return end
+	if fakePart and fakePart.Parent then fakePart:Destroy() end
+	fakePart = Instance.new("Part")
+	fakePart.Name = "FakeRoot"
+	fakePart.Size = Vector3.new(2, 2, 1)
+	fakePart.Transparency = 1
+	fakePart.CanCollide = false
+	fakePart.Anchored = true
+	fakePart.Parent = workspace
+	if fakeConn then fakeConn:Disconnect() end
+	fakeConn = RunService.Heartbeat:Connect(function()
+		if not State.FakePosition then return end
+		char = getCharacter()
+		root = getRoot(char)
+		if not root or not fakePart then return end
+		local realPos = root.Position
+		fakePart.CFrame = CFrame.new(realPos.X, realPos.Y + fakeOffsetY, realPos.Z)
+	end)
+end
+
+local function stopFakePosition()
+	if fakeConn then fakeConn:Disconnect() fakeConn = nil end
+	if fakePart then fakePart:Destroy() fakePart = nil end
+end
+
+---------------------------------------------------------------------
+-- FAST SHOOT
+---------------------------------------------------------------------
+local gunExceptions = { Sniper = true, Crossbow = true, Bow = true, RPG = true }
+local gunFields = { ShootSpread = 0, ShootAccuracy = 0, ShootRecoil = 0, ShootCooldown = 0.001, ShootBurstCooldown = 0.001 }
+local meleeFields = { AttackCooldown = 0.001, SwingCooldown = 0.001, MeleeCooldown = 0.001, Cooldown = 0.001, RecoveryTime = 0.001, ResetTime = 0.001 }
+local fastShootSaved = {}
+
+local function patchFields(data, fields, enabled)
+	local saved = fastShootSaved[data]
+	if not saved then
+		saved = {}
+		fastShootSaved[data] = saved
+	end
+	for field, fast in pairs(fields) do
+		if enabled then
+			local cur = data[field]
+			if typeof(cur) == "number" then
+				if saved[field] == nil then saved[field] = cur end
+				data[field] = fast
+			end
+		elseif saved[field] ~= nil then
+			data[field] = saved[field]
+			saved[field] = nil
+		end
+	end
+end
+
+local function applyFastShoot(enabled)
+	if game.GameId ~= 6035872082 then
+		if enabled then warn("[kawaii.gg] Fast Shoot is tuned for Rivals (GameId 6035872082)") end
+		return
+	end
+	local ok, Items = pcall(function()
+		return require(ReplicatedStorage.Modules.ItemLibrary).Items
+	end)
+	if not ok or not Items then
+		warn("[kawaii.gg] Could not reach ItemLibrary")
+		return
+	end
+	for name, data in pairs(Items) do
+		if typeof(data) == "table" then
+			if not gunExceptions[name] then pcall(patchFields, data, gunFields, enabled) end
+			pcall(patchFields, data, meleeFields, enabled)
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- BAITING
+---------------------------------------------------------------------
+local Bait = { active = false }
+local notifyWin = nil
+
+local function notify(title, content, kind)
+	if notifyWin then notifyWin:Notify({ Title = title, Content = content, Type = kind }) end
+end
+
+local function updateBait()
+	if not Bait.origin then return end
+	local fh = workspace.FallenPartsDestroyHeight
+	if fh ~= fh then fh = -500 end
+	local y = math.max(Bait.origin.Y - State.BaitDistance, fh + 20)
+	Bait.cframe = CFrame.new(Bait.origin.X, y, Bait.origin.Z) * Bait.rot
+end
+
+local function startBaiting()
+	if Bait.active then return end
+	clearConnections()
+	local char = getCharacter()
+	local root, hum = getRoot(char), getHumanoid(char)
+	if not root or not hum then return end
+	claimOwnership(root)
+
+	Bait.active = true
+	Bait.char = char
+	Bait.home = root.CFrame
+	Bait.origin = root.Position
+	Bait.rot = root.CFrame.Rotation
+	updateBait()
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then part.CanCollide = false end
+	end
+
+	table.insert(Connections, RunService.Heartbeat:Connect(function()
+		if not State.Ragebot or State.Method ~= "Baiting" then return end
+		if voidGateSuspends() then return end
+		local c = getCharacter()
+		local r, h = getRoot(c), getHumanoid(c)
+		if not r or not h or h.Health <= 0 then return end
+		r.CFrame = Bait.cframe
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+		h.PlatformStand = true
+	end))
+	notify("Baiting", "Hiding " .. math.floor(Bait.origin.Y - Bait.cframe.Position.Y) .. " studs under you", "Success")
+end
+
+local function stopBaiting()
+	if not Bait.active then return end
+	Bait.active = false
+	clearConnections()
+	local char = getCharacter()
+	local root, hum = getRoot(char), getHumanoid(char)
+	if root and Bait.char == char and Bait.home then
+		root.CFrame = Bait.home
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = true end
+		end
+	end
+	if hum then hum.PlatformStand = State.HitboxSmaller end
+	Bait.home, Bait.origin = nil, nil
+end
+
+---------------------------------------------------------------------
+-- CLASSIC
+---------------------------------------------------------------------
+local Classic = { active = false }
+
+local function classicRoot(plr)
+	if plr == player then return nil end
+	if State.ClassicTeamCheck and plr.Team ~= nil and plr.Team == player.Team then return nil end
+	local char = plr.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or not root or hum.Health <= 0 then return nil end
+	if not (root.Position.Magnitude < 1e9) then return nil end
+	return root
+end
+
+local function classicPick(myRoot)
+	local best, bestDist
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local r = classicRoot(plr)
+		if r then
+			local d = (r.Position - myRoot.Position).Magnitude
+			if not bestDist or d < bestDist then
+				best, bestDist = plr, d
+			end
+		end
+	end
+	return best
+end
+
+local function classicStep()
+	if not State.Ragebot or State.Method ~= "Classic" then return end
+	if voidGateSuspends() then return end
+	local char = getCharacter()
+	local root, hum = getRoot(char), getHumanoid(char)
+	if not root or not hum or hum.Health <= 0 then return end
+	local now0 = os.clock()
+	if now0 - (Classic.lastClaim or 0) >= 0.5 then
+		Classic.lastClaim = now0
+		claimOwnership(root)
+	end
+
+	local tRoot = Classic.target and classicRoot(Classic.target)
+	if not tRoot then
+		local newTarget = classicPick(root)
+		if newTarget ~= Classic.target then
+			Classic.orbitAngle, Classic.lastOrbitT, Classic.lastClick2 = 0, nil, 0
+		end
+		Classic.target = newTarget
+		tRoot = Classic.target and classicRoot(Classic.target)
+		if not tRoot then return end
+	end
+
+	if State.ClassicMode == "Melee Orbit" then
+		local now = os.clock()
+		local dt = now - (Classic.lastOrbitT or now)
+		Classic.lastOrbitT = now
+		Classic.orbitAngle = (Classic.orbitAngle or 0) + math.rad(State.ClassicOrbitSpeed) * dt
+		local offset = Vector3.new(math.cos(Classic.orbitAngle), 0, math.sin(Classic.orbitAngle)) * 1
+		local pos = tRoot.Position + offset
+		root.CFrame = CFrame.lookAt(pos, tRoot.Position)
+	elseif State.ClassicMode == "Knife Backstab" then
+		root.CFrame = tRoot.CFrame * CFrame.new(0, 0, 1)
+		local now = os.clock()
+		if now - (Classic.lastClick2 or 0) >= State.ClassicBackstabRate then
+			Combat.Click2()
+			Classic.lastClick2 = now
+		end
+	else
+		local cf = tRoot.CFrame
+		if State.ClassicOffset > 0 then cf = cf * CFrame.new(0, 0, State.ClassicOffset) end
+		root.CFrame = cf
+	end
+	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function startClassic()
+	if Classic.active then return end
+	clearConnections()
+	local char = getCharacter()
+	local root = getRoot(char)
+	if not root then return end
+	claimOwnership(root)
+	Classic.active = true
+	Classic.char = char
+	Classic.home = root.CFrame
+	Classic.target = nil
+	Classic.orbitAngle, Classic.lastOrbitT, Classic.lastClick2 = 0, nil, 0
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then part.CanCollide = false end
+	end
+	for _, signal in ipairs({ RunService.Stepped, RunService.Heartbeat, RunService.RenderStepped }) do
+		table.insert(Connections, signal:Connect(classicStep))
+	end
+end
+
+local function stopClassic()
+	if not Classic.active then return end
+	Classic.active = false
+	clearConnections()
+	local char = getCharacter()
+	local root = getRoot(char)
+	if root and Classic.char == char and Classic.home then
+		root.CFrame = Classic.home
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then part.CanCollide = true end
+		end
+	end
+	Classic.target, Classic.home = nil, nil
+end
+
+---------------------------------------------------------------------
+-- RAGEBOT STATUS + ROUTER
+---------------------------------------------------------------------
+local function ragebotStatus()
+	if not State.Ragebot then return "Ragebot: Off" end
+	if State.Voidspam and VoidGate.phase == "spam" then return "Ragebot: Voidspamming" end
+	if State.Method == "Classic" then
+		return Classic.target and ("Ragebot: Attacking " .. Classic.target.Name) or "Ragebot: Searching"
+	elseif State.Method == "Baiting" then
+		return "Ragebot: Baiting"
+	elseif State.Method == "Underground" then
+		return "Ragebot: Digging"
+	elseif State.Method == "UE Counter" then
+		return "Ragebot: UE Countering"
+	end
+	return "Ragebot: " .. State.Method
+end
+
+local function startMethod()
+	if State.Method == "Underground" then
+		startUnderground()
+	elseif State.Method == "UE Counter" then
+		startUECounter()
+	elseif State.Method == "Baiting" then
+		startBaiting()
+	elseif State.Method == "Classic" then
+		startClassic()
+	end
+	if State.Voidspam then startVoidGate() end
+end
+
+local function stopMethod()
+	stopUnderground()
+	stopUECounter()
+	stopBaiting()
+	stopClassic()
+	stopVoidGate()
+end
+
+---------------------------------------------------------------------
+-- PRIMARY FIX
+---------------------------------------------------------------------
+local PrimaryFix = { lastTarget = nil, acquireAt = 0, lastFire = 0 }
+
+RunService.RenderStepped:Connect(function()
+	if not State.PrimaryFix then
+		PrimaryFix.lastTarget = nil
+		return
+	end
+	local plr = Combat.CrosshairTarget(1000, true)
+	local now = os.clock()
+	if plr then
+		if PrimaryFix.lastTarget ~= plr then
+			PrimaryFix.lastTarget = plr
+			PrimaryFix.acquireAt = now
+		end
+		if now - PrimaryFix.acquireAt >= State.PrimaryReaction and now - PrimaryFix.lastFire >= State.PrimaryReaction then
+			Combat.Click()
+			PrimaryFix.lastFire = now
+		end
+	else
+		PrimaryFix.lastTarget = nil
+	end
+end)
+
+---------------------------------------------------------------------
+-- CHARACTER RESPAWN
+---------------------------------------------------------------------
+local respawnConn = player.CharacterAdded:Connect(function()
+	task.wait(0.7)
+	if State.Ragebot then startMethod() end
+	if State.HitboxSmaller then applyHitboxSmaller(true) end
+	if State.FakePosition then startFakePosition() end
+	if State.FastShoot then applyFastShoot(true) end
+end)
+
+---------------------------------------------------------------------
+-- LEGIT (aimbot, silent aim, triggerbot, esp)
+---------------------------------------------------------------------
+local hasDrawing = typeof(Drawing) == "table" and typeof(Drawing.new) == "function"
+
+local Legit = (function()
+	local M = {}
+	local V = {
+		Aimbot = false, AimFov = 12, AimShowFov = true, AimSmooth = 0.3,
+		AimVisibleCheck = true, AimTeamCheck = true, AimBone = "Head",
+		SilentAim = false, SilentFov = 15, SilentHitChance = 100,
+		Triggerbot = false, TriggerReaction = 0.08, TriggerTeamCheck = true,
+		Esp = false, EspSkeleton = true, EspTracer = true, EspHealth = true,
+		EspName = true, EspTeamCheck = false, EspVisibleColor = true, EspMaxDist = 2500,
+	}
+	M.State = V
+	M.BoneNames = { "Head", "UpperTorso", "HumanoidRootPart" }
+
+	if not hasDrawing then
+		warn("[kawaii.gg] This executor has no Drawing library - ESP/aimbot FOV circle won't render")
+	end
+
+	local function boneOf(char, name)
+		if not char then return nil end
+		local part = char:FindFirstChild(name)
+		if part then return part end
+		if name == "UpperTorso" then return char:FindFirstChild("Torso") end
+		return char:FindFirstChild("HumanoidRootPart")
+	end
+	M.BoneOf = boneOf
+
+	local function wantsAim()
+		if not V.Aimbot then return false end
+		if UserInputService.MouseEnabled and not UserInputService.TouchEnabled then
+			return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+		end
+		return true
+	end
+
+	local fovCircle = nil
+
+	local function syncFovCircle()
+		if not hasDrawing then return end
+		if V.Aimbot and V.AimShowFov then
+			if not fovCircle then
+				fovCircle = Drawing.new("Circle")
+				fovCircle.Thickness = 1
+				fovCircle.NumSides = 48
+				fovCircle.Filled = false
+				fovCircle.Transparency = 1
+				fovCircle.Color = Color3.new(1, 1, 1)
+			end
+			local cam = workspace.CurrentCamera
+			if cam then
+				local vp = cam.ViewportSize
+				fovCircle.Position = Vector2.new(vp.X / 2, vp.Y / 2)
+				fovCircle.Radius = math.tan(math.rad(V.AimFov)) / math.tan(math.rad(cam.FieldOfView / 2)) * (vp.Y / 2)
+				fovCircle.Visible = true
+			end
+		elseif fovCircle then
+			fovCircle.Visible = false
+		end
+	end
+
+	local AIM_STEP = "LH_Aimbot"
+	local aimBound = false
+
+	local function onAimRender()
+		syncFovCircle()
+		if not wantsAim() then return end
+		local cam = workspace.CurrentCamera
+		local target = Combat.FovTarget(V.AimFov, V.AimTeamCheck, V.AimVisibleCheck)
+		if not cam or not target then return end
+		local bone = boneOf(target.player.Character, V.AimBone) or target.root
+		local goal = CFrame.lookAt(cam.CFrame.Position, bone.Position)
+		cam.CFrame = cam.CFrame:Lerp(goal, 1 - V.AimSmooth)
+	end
+
+	local function syncAimbot()
+		local need = V.Aimbot
+		if need and not aimBound then
+			aimBound = true
+			RunService:BindToRenderStep(AIM_STEP, Enum.RenderPriority.Camera.Value + 1, onAimRender)
+		elseif not need and aimBound then
+			aimBound = false
+			RunService:UnbindFromRenderStep(AIM_STEP)
+			syncFovCircle()
+		end
+	end
+
+	local function trySilentShot(fovDeg, teamCheck)
+		if not V.SilentAim then return false end
+		local target = Combat.FovTarget(fovDeg or V.SilentFov, teamCheck, false)
+		if not target then return false end
+		if math.random() * 100 > V.SilentHitChance then return false end
+		local cam = workspace.CurrentCamera
+		if not cam then return false end
+		local bone = boneOf(target.player.Character, V.AimBone) or target.root
+		local saved = cam.CFrame
+		cam.CFrame = CFrame.lookAt(cam.CFrame.Position, bone.Position)
+		task.defer(function()
+			if workspace.CurrentCamera == cam then cam.CFrame = saved end
+		end)
+		return true
+	end
+	M.TrySilentShot = trySilentShot
+
+	local manualConn = nil
+	local function syncManualHook()
+		if V.SilentAim and not manualConn then
+			manualConn = UserInputService.InputBegan:Connect(function(input, processed)
+				if processed then return end
+				if input.UserInputType == Enum.UserInputType.MouseButton1
+					or input.UserInputType == Enum.UserInputType.Touch then
+					trySilentShot(V.SilentFov, true)
+				end
+			end)
+		elseif not V.SilentAim and manualConn then
+			manualConn:Disconnect()
+			manualConn = nil
+		end
+	end
+
+	local Trigger = { lastTarget = nil, acquireAt = 0, lastFire = 0 }
+	RunService.RenderStepped:Connect(function()
+		if not V.Triggerbot then
+			Trigger.lastTarget = nil
+			return
+		end
+		local plr = Combat.CrosshairTarget(1000, V.TriggerTeamCheck)
+		local now = os.clock()
+		if plr then
+			if Trigger.lastTarget ~= plr then
+				Trigger.lastTarget = plr
+				Trigger.acquireAt = now
+			end
+			if now - Trigger.acquireAt >= V.TriggerReaction and now - Trigger.lastFire >= V.TriggerReaction then
+				trySilentShot(V.SilentFov, V.TriggerTeamCheck)
+				Combat.Click()
+				Trigger.lastFire = now
+			end
+		else
+			Trigger.lastTarget = nil
+		end
+	end)
+
+	local R15_EDGES = {
+		{ "Head", "UpperTorso" }, { "UpperTorso", "LowerTorso" },
+		{ "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
+		{ "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
+		{ "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
+		{ "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
+	}
+	local R6_EDGES = {
+		{ "Head", "Torso" }, { "Torso", "Left Arm" }, { "Torso", "Right Arm" },
+		{ "Torso", "Left Leg" }, { "Torso", "Right Leg" },
+	}
+	local function edgesFor(char)
+		return char:FindFirstChild("UpperTorso") and R15_EDGES or R6_EDGES
+	end
+
+	local espObjs = {}
+
+	local function newLine(thick)
+		local l = Drawing.new("Line")
+		l.Thickness = thick or 1.4
+		l.Transparency = 1
+		l.Visible = false
+		return l
+	end
+
+	local function ensureEsp(plr)
+		local o = espObjs[plr]
+		if o then return o end
+		o = {
+			skeleton = {}, tracer = newLine(1.4),
+			healthBg = newLine(3), healthFg = newLine(3),
+			nameText = Drawing.new("Text"),
+		}
+		o.nameText.Size = 14
+		o.nameText.Center = true
+		o.nameText.Outline = true
+		o.nameText.Transparency = 1
+		for i = 1, #R15_EDGES do o.skeleton[i] = newLine(1.2) end
+		espObjs[plr] = o
+		return o
+	end
+
+	local function hideEsp(o)
+		o.tracer.Visible = false
+		o.healthBg.Visible = false
+		o.healthFg.Visible = false
+		o.nameText.Visible = false
+		for _, l in ipairs(o.skeleton) do l.Visible = false end
+	end
+
+	local function destroyEsp(plr)
+		local o = espObjs[plr]
+		if not o then return end
+		o.tracer:Remove()
+		o.healthBg:Remove()
+		o.healthFg:Remove()
+		o.nameText:Remove()
+		for _, l in ipairs(o.skeleton) do l:Remove() end
+		espObjs[plr] = nil
+	end
+
+	local function updateEspFor(plr, cam)
+		local char = plr.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local head = char and char:FindFirstChild("Head")
+		local o = ensureEsp(plr)
+		if not hum or not root or not head or hum.Health <= 0 then
+			hideEsp(o)
+			return
+		end
+		if V.EspTeamCheck and plr.Team ~= nil and plr.Team == player.Team then
+			hideEsp(o)
+			return
+		end
+		local dist = (root.Position - cam.CFrame.Position).Magnitude
+		if dist > V.EspMaxDist then
+			hideEsp(o)
+			return
+		end
+
+		local color = Theme.Accent
+		if V.EspVisibleColor then
+			color = Combat.IsVisible(root, cam.CFrame.Position) and Color3.fromRGB(90, 230, 120) or Color3.fromRGB(255, 70, 70)
+		end
+
+		if V.EspSkeleton then
+			local edges = edgesFor(char)
+			local i = 0
+			for _, edge in ipairs(edges) do
+				i += 1
+				local a, b = char:FindFirstChild(edge[1]), char:FindFirstChild(edge[2])
+				local line = o.skeleton[i]
+				if a and b then
+					local p0, v0 = cam:WorldToViewportPoint(a.Position)
+					local p1, v1 = cam:WorldToViewportPoint(b.Position)
+					if v0 and v1 then
+						line.From, line.To, line.Color = Vector2.new(p0.X, p0.Y), Vector2.new(p1.X, p1.Y), color
+						line.Visible = true
+					else
+						line.Visible = false
+					end
+				else
+					line.Visible = false
+				end
+			end
+			for j = i + 1, #o.skeleton do o.skeleton[j].Visible = false end
+		else
+			for _, l in ipairs(o.skeleton) do l.Visible = false end
+		end
+
+		local headPos, headOn = cam:WorldToViewportPoint(head.Position + Vector3.new(0, 0.6, 0))
+		local footPos, footOn = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 3, 0))
+
+		if V.EspTracer and headOn then
+			local vp = cam.ViewportSize
+			o.tracer.From, o.tracer.To, o.tracer.Color = Vector2.new(vp.X / 2, vp.Y), Vector2.new(headPos.X, headPos.Y), color
+			o.tracer.Visible = true
+		else
+			o.tracer.Visible = false
+		end
+
+		if V.EspHealth and headOn and footOn then
+			local x, yTop, yBot = headPos.X - 14, headPos.Y, footPos.Y
+			o.healthBg.From, o.healthBg.To, o.healthBg.Color = Vector2.new(x, yTop), Vector2.new(x, yBot), Color3.fromRGB(20, 20, 20)
+			o.healthBg.Visible = true
+			local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+			o.healthFg.From, o.healthFg.To = Vector2.new(x, yBot), Vector2.new(x, yBot - (yBot - yTop) * pct)
+			o.healthFg.Color = Color3.fromHSV(pct * 0.33, 1, 1)
+			o.healthFg.Visible = true
+		else
+			o.healthBg.Visible = false
+			o.healthFg.Visible = false
+		end
+
+		if V.EspName and headOn then
+			o.nameText.Text = plr.Name .. "  [" .. math.floor(dist) .. "]"
+			o.nameText.Position = Vector2.new(headPos.X, headPos.Y - 16)
+			o.nameText.Color = color
+			o.nameText.Visible = true
+		else
+			o.nameText.Visible = false
+		end
+	end
+
+	local function espStep()
+		local cam = workspace.CurrentCamera
+		if not V.Esp or not cam or not hasDrawing then
+			for _, o in pairs(espObjs) do hideEsp(o) end
+			return
+		end
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= player then updateEspFor(plr, cam) end
+		end
+	end
+	RunService.RenderStepped:Connect(espStep)
+	Players.PlayerRemoving:Connect(destroyEsp)
+
+	function M.Update()
+		syncAimbot()
+		syncFovCircle()
+		syncManualHook()
+	end
+
+	function M.Shutdown()
+		for k, v in pairs(V) do
+			if v == true then V[k] = false end
+		end
+		M.Update()
+		for plr in pairs(espObjs) do destroyEsp(plr) end
+	end
+
+	return M
+end)()
+
+---------------------------------------------------------------------
+-- VISUALS (client-side only)
+---------------------------------------------------------------------
+local Visuals = (function()
+	local M = {}
+	local Lighting = game:GetService("Lighting")
+
+	local COLORS = {
+		White = Color3.fromRGB(255, 255, 255),
+		Purple = Color3.fromRGB(150, 80, 255),
+		Blue = Color3.fromRGB(70, 140, 255),
+		Cyan = Color3.fromRGB(70, 230, 230),
+		Green = Color3.fromRGB(70, 230, 120),
+		Pink = Color3.fromRGB(255, 100, 200),
+		Red = Color3.fromRGB(255, 70, 70),
+		Orange = Color3.fromRGB(255, 150, 60),
+		Yellow = Color3.fromRGB(255, 220, 70),
+	}
+	M.ColorNames = { "White", "Purple", "Blue", "Cyan", "Green", "Pink", "Red", "Orange", "Yellow" }
+
+	local SKY = {
+		Midday = { clock = 13, ambient = Color3.fromRGB(150, 150, 160), brightness = 2.5, stars = 0 },
+		Sunset = { clock = 17.8, ambient = Color3.fromRGB(170, 100, 90), brightness = 2, stars = 0 },
+		Dawn = { clock = 5.7, ambient = Color3.fromRGB(150, 120, 150), brightness = 1.6, stars = 800 },
+		Night = { clock = 0, ambient = Color3.fromRGB(50, 60, 110), brightness = 1, stars = 3000 },
+		Space = { clock = 0, ambient = Color3.fromRGB(25, 25, 50), brightness = 0.5, stars = 5000 },
+		Neon = { clock = 0, ambient = Color3.fromRGB(130, 50, 210), brightness = 1.2, stars = 4000 },
+		Overcast = { clock = 12, ambient = Color3.fromRGB(125, 130, 140), brightness = 1.2, stars = 0 },
+	}
+	M.SkyNames = { "Midday", "Sunset", "Dawn", "Night", "Space", "Neon", "Overcast" }
+
+	local V = {
+		Sky = false, SkyPreset = "Night", SkyIds = "",
+		Ambience = false, AmbientColor = "Purple", Brightness = 2, Exposure = 0,
+		Rainbow = false, RainbowSpeed = 0.2,
+		Fullbright = false, NoShadows = false, ClockLock = false, ClockTime = 14,
+		Fog = false, FogColor = "White", FogStart = 0, FogEnd = 300,
+		Bloom = false, BloomIntensity = 1, BloomSize = 24, BloomThreshold = 0.8,
+		Color = false, Saturation = 0, Contrast = 0, CCBrightness = 0, Tint = "White",
+		Rays = false, RaysIntensity = 0.25, RaysSpread = 1,
+		Aurora = false, AuroraSpeed = 1, AuroraHeight = 350, AuroraIntensity = 0.8,
+		ThirdPerson = false, TPDistance = 10, TPX = 0, TPY = 0,
+		Fov = false, FovValue = 90,
+	}
+	M.State = V
+
+	local LIGHT_PROPS = {
+		"Ambient", "OutdoorAmbient", "Brightness", "ClockTime",
+		"ExposureCompensation", "FogColor", "FogStart", "FogEnd", "GlobalShadows",
+	}
+	local orig, touched, lightConn = nil, {}, nil
+	local skyObj, skiesHidden = nil, false
+
+	local function snapshot()
+		if orig then return end
+		orig = { skies = {} }
+		for _, p in ipairs(LIGHT_PROPS) do orig[p] = Lighting[p] end
+		for _, c in ipairs(Lighting:GetChildren()) do
+			if c:IsA("Sky") then table.insert(orig.skies, c) end
+		end
+	end
+
+	local function target()
+		local t = {}
+		if V.Sky then
+			local p = SKY[V.SkyPreset]
+			if p then
+				t.ClockTime = p.clock
+				t.Ambient = p.ambient
+				t.OutdoorAmbient = p.ambient
+				t.Brightness = p.brightness
+			end
+		end
+		if V.Ambience then
+			local c = COLORS[V.AmbientColor] or COLORS.White
+			t.Ambient = c
+			t.OutdoorAmbient = c
+			t.Brightness = V.Brightness
+			t.ExposureCompensation = V.Exposure
+		end
+		if V.Rainbow then
+			local c = Color3.fromHSV((os.clock() * V.RainbowSpeed) % 1, 0.75, 1)
+			t.Ambient = c
+			t.OutdoorAmbient = c
+		end
+		if V.Fullbright then
+			t.Ambient = Color3.new(1, 1, 1)
+			t.OutdoorAmbient = Color3.new(1, 1, 1)
+			t.Brightness = 2
+			t.ClockTime = 14
+			t.FogEnd = 1e6
+		end
+		if V.Fog then
+			t.FogColor = COLORS[V.FogColor] or COLORS.White
+			t.FogStart = V.FogStart
+			t.FogEnd = math.max(V.FogEnd, V.FogStart + 1)
+		end
+		if V.ClockLock then t.ClockTime = V.ClockTime end
+		if V.NoShadows or V.Fullbright then t.GlobalShadows = false end
+		return t
+	end
+
+	local function step()
+		if not orig then return end
+		local t = target()
+		for k, v in pairs(t) do
+			touched[k] = true
+			if Lighting[k] ~= v then Lighting[k] = v end
+		end
+		for k in pairs(touched) do
+			if t[k] == nil then
+				Lighting[k] = orig[k]
+				touched[k] = nil
+			end
+		end
+	end
+
+	local function syncLighting()
+		if next(target()) ~= nil then
+			snapshot()
+			step()
+			if not lightConn then lightConn = RunService.Heartbeat:Connect(step) end
+		else
+			if orig then step() end
+			if lightConn then
+				lightConn:Disconnect()
+				lightConn = nil
+			end
+			if next(touched) == nil then orig = nil end
+		end
+	end
+
+	local FACES = { "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp" }
+	local DEFAULT_FACES = {
+		"rbxasset://textures/sky/sky512_bk.tex", "rbxasset://textures/sky/sky512_dn.tex",
+		"rbxasset://textures/sky/sky512_ft.tex", "rbxasset://textures/sky/sky512_lf.tex",
+		"rbxasset://textures/sky/sky512_rt.tex", "rbxasset://textures/sky/sky512_up.tex",
+	}
+
+	local function applyIds()
+		local ids = {}
+		for token in string.gmatch(V.SkyIds, "%d+") do table.insert(ids, token) end
+		for i, face in ipairs(FACES) do
+			if #ids == 0 then
+				skyObj[face] = DEFAULT_FACES[i]
+			else
+				skyObj[face] = "rbxassetid://" .. ((#ids >= 6) and ids[i] or ids[1])
+			end
+		end
+	end
+
+	local function syncSky()
+		if V.Sky then
+			snapshot()
+			if not skiesHidden then
+				for _, sk in ipairs(orig.skies) do pcall(function() sk.Parent = nil end) end
+				skiesHidden = true
+			end
+			if not skyObj or not skyObj.Parent then
+				skyObj = Instance.new("Sky")
+				skyObj.Name = "Kawaii_Sky"
+				skyObj.Parent = Lighting
+			end
+			local p = SKY[V.SkyPreset]
+			skyObj.StarCount = p and p.stars or 3000
+			applyIds()
+		else
+			if skyObj then
+				skyObj:Destroy()
+				skyObj = nil
+			end
+			if skiesHidden and orig then
+				for _, sk in ipairs(orig.skies) do pcall(function() sk.Parent = Lighting end) end
+			end
+			skiesHidden = false
+		end
+	end
+
+	local fx = {}
+	local function effect(class, name, on, props)
+		local inst = fx[name]
+		if on then
+			if not inst or not inst.Parent then
+				inst = Instance.new(class)
+				inst.Name = "Kawaii_" .. name
+				inst.Parent = Lighting
+				fx[name] = inst
+			end
+			for k, v in pairs(props) do inst[k] = v end
+		elseif inst then
+			inst:Destroy()
+			fx[name] = nil
+		end
+	end
+
+	local aurora = { folder = nil, conn = nil, ribbons = nil, lastIntensity = nil }
+
+	local function stopAurora()
+		if aurora.conn then
+			aurora.conn:Disconnect()
+			aurora.conn = nil
+		end
+		if aurora.folder then
+			aurora.folder:Destroy()
+			aurora.folder = nil
+		end
+		aurora.ribbons = nil
+	end
+
+	local function auroraTransparency(intensity, extra)
+		local mid = math.min(1, 1 - 0.85 * intensity + extra)
+		local edge = math.min(1, mid + 0.35)
+		return NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.15, edge),
+			NumberSequenceKeypoint.new(0.5, mid),
+			NumberSequenceKeypoint.new(0.85, edge),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+	end
+
+	local function startAurora()
+		stopAurora()
+		local folder = Instance.new("Folder")
+		folder.Name = "Kawaii_Aurora"
+		folder.Parent = workspace
+
+		local function anchor()
+			local part = Instance.new("Part")
+			part.Anchored = true
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.CastShadow = false
+			part.Transparency = 1
+			part.Size = Vector3.new(1, 1, 1)
+			part.Parent = folder
+			local att = Instance.new("Attachment")
+			att.CFrame = CFrame.Angles(0, 0, math.pi / 2)
+			att.Parent = part
+			return part, att
+		end
+
+		local ribbons = {}
+		for i = 1, 4 do
+			local p0, a0 = anchor()
+			local p1, a1 = anchor()
+			local beams = {}
+			for j = 1, 2 do
+				local beam = Instance.new("Beam")
+				beam.Attachment0 = a0
+				beam.Attachment1 = a1
+				beam.FaceCamera = true
+				beam.LightEmission = 1
+				beam.LightInfluence = 0
+				beam.Segments = 40
+				local w = (j == 1) and 170 or 70
+				beam.Width0 = w
+				beam.Width1 = w
+				beam.Parent = p0
+				beams[j] = beam
+			end
+			ribbons[i] = { p0 = p0, p1 = p1, beams = beams, phase = i * 1.9 }
+		end
+		aurora.folder = folder
+		aurora.ribbons = ribbons
+		aurora.lastIntensity = nil
+
+		aurora.conn = RunService.Heartbeat:Connect(function()
+			local cam = workspace.CurrentCamera
+			if not cam or not aurora.ribbons then return end
+			local base = cam.CFrame.Position
+			local t = os.clock() * V.AuroraSpeed
+			local restyle = aurora.lastIntensity ~= V.AuroraIntensity
+			aurora.lastIntensity = V.AuroraIntensity
+			for i, r in ipairs(aurora.ribbons) do
+				local z = base.Z - 650 - i * 110
+				local y = V.AuroraHeight + math.sin(t * 0.4 + r.phase) * 35 + i * 20
+				r.p0.Position = Vector3.new(base.X - 900, y, z + math.sin(t * 0.3 + r.phase) * 90)
+				r.p1.Position = Vector3.new(base.X + 900, y + math.sin(t * 0.5 + r.phase * 2) * 60, z + math.cos(t * 0.3 + r.phase) * 90)
+				local hue = 0.38 + 0.1 * math.sin(t * 0.25 + r.phase)
+				local seq = ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.fromHSV(hue, 0.8, 1)),
+					ColorSequenceKeypoint.new(0.5, Color3.fromHSV((hue + 0.18) % 1, 0.85, 1)),
+					ColorSequenceKeypoint.new(1, Color3.fromHSV((hue + 0.35) % 1, 0.8, 1)),
+				})
+				for j, beam in ipairs(r.beams) do
+					beam.Color = seq
+					beam.CurveSize0 = math.sin(t * 0.8 + r.phase) * 140
+					beam.CurveSize1 = math.cos(t * 0.7 + r.phase) * 140
+					if restyle then
+						beam.Transparency = auroraTransparency(V.AuroraIntensity, j == 1 and 0.4 or 0)
+					end
+				end
+			end
+		end)
+	end
+
+	local STEP_NAME = "Kawaii_VisualsCamera"
+	local renderBound = false
+	local origFov = nil
+	local tpParams = RaycastParams.new()
+	tpParams.FilterType = Enum.RaycastFilterType.Exclude
+	tpParams.RespectCanCollide = true
+	local charParts, lastScan = {}, 0
+
+	local function onRender()
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		if V.Fov then
+			origFov = origFov or cam.FieldOfView
+			cam.FieldOfView = V.FovValue
+		end
+		if V.ThirdPerson then
+			local char = player.Character
+			if char then
+				if os.clock() - lastScan > 1 then
+					lastScan = os.clock()
+					charParts = {}
+					for _, d in ipairs(char:GetDescendants()) do
+						if d:IsA("BasePart") then table.insert(charParts, d) end
+					end
+				end
+				for _, part in ipairs(charParts) do part.LocalTransparencyModifier = 0 end
+				tpParams.FilterDescendantsInstances = { char }
+			end
+			local cf = cam.CFrame
+			local look = cf.LookVector
+			local goal = cf.Position - look * V.TPDistance + cf.RightVector * V.TPX + cf.UpVector * V.TPY
+			local dir = goal - cf.Position
+			local hit = workspace:Raycast(cf.Position, dir, tpParams)
+			if hit then
+				goal = cf.Position + dir.Unit * math.max(hit.Distance - 0.5, 0.5)
+			end
+			cam.CFrame = CFrame.lookAt(goal, goal + look)
+		end
+	end
+
+	local function syncRender()
+		local need = V.ThirdPerson or V.Fov
+		if need and not renderBound then
+			renderBound = true
+			RunService:BindToRenderStep(STEP_NAME, Enum.RenderPriority.Last.Value, onRender)
+		elseif not need and renderBound then
+			renderBound = false
+			RunService:UnbindFromRenderStep(STEP_NAME)
+			local cam = workspace.CurrentCamera
+			if cam and origFov then cam.FieldOfView = origFov end
+			origFov = nil
+		elseif renderBound and not V.Fov and origFov then
+			local cam = workspace.CurrentCamera
+			if cam then cam.FieldOfView = origFov end
+			origFov = nil
+		end
+	end
+
+	function M.Update()
+		syncSky()
+		syncLighting()
+		effect("BloomEffect", "Bloom", V.Bloom, {
+			Intensity = V.BloomIntensity, Size = V.BloomSize, Threshold = V.BloomThreshold,
+		})
+		effect("ColorCorrectionEffect", "Color", V.Color, {
+			Saturation = V.Saturation, Contrast = V.Contrast,
+			Brightness = V.CCBrightness, TintColor = COLORS[V.Tint] or COLORS.White,
+		})
+		effect("SunRaysEffect", "Rays", V.Rays, { Intensity = V.RaysIntensity, Spread = V.RaysSpread })
+		if V.Aurora then
+			if not aurora.folder then startAurora() end
+		else
+			stopAurora()
+		end
+		syncRender()
+	end
+
+	function M.Shutdown()
+		for k, v in pairs(V) do
+			if v == true then V[k] = false end
+		end
+		M.Update()
+	end
+
+	return M
+end)()
+
+---------------------------------------------------------------------
+-- HUD (watermark + live position)
+---------------------------------------------------------------------
+local HUD = (function()
+	local M = {}
+	local hud, mark, posBox, posLabel
+	local conn1, conn2
+
+	local function refresh()
+		if not posLabel then return end
+		local root = getRoot(getCharacter())
+		if not root then return end
+		local p = root.Position
+		posLabel.Text = string.format("X  %.1f\nY  %.1f\nZ  %.1f", p.X, p.Y, p.Z)
+	end
+
+	local statusBox, statusLabel, statusConn
+
+	function M.Bind()
+		hud = new("ScreenGui", {
+			Name = "KawaiiHUD",
+			ResetOnSpawn = false,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+			IgnoreGuiInset = true,
+			DisplayOrder = 998,
+			Parent = itemsGui.Parent or playerGui,
+		})
+
+		mark = new("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, 44),
+			Size = UDim2.fromOffset(160, 52),
+			BackgroundColor3 = Color3.fromRGB(14, 14, 20),
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+			Parent = hud,
+		})
+		corner(mark, 10)
+		stroke(mark, Theme.Accent)
+		local peng = createPenguin(mark)
+		peng.Position = UDim2.fromOffset(8, 5)
+		new("UIScale", { Scale = 1.6, Parent = peng })
+		local label = text(mark, "kawaii.gg", 18, Theme.Text, Theme.FontBold, {
+			Position = UDim2.fromOffset(58, 0),
+			Size = UDim2.new(1, -62, 1, 0),
+		})
+		label.TextXAlignment = Enum.TextXAlignment.Left
+
+		statusBox = new("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, 104),
+			Size = UDim2.fromOffset(200, 32),
+			BackgroundColor3 = Color3.fromRGB(14, 14, 20),
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+			Visible = false,
+			Parent = hud,
+		})
+		corner(statusBox, 8)
+		stroke(statusBox, Theme.Accent)
+		statusLabel = text(statusBox, "", 13, Theme.Text, Theme.FontBold, {
+			Position = UDim2.fromOffset(10, 0),
+			Size = UDim2.new(1, -20, 1, 0),
+		})
+		statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+		statusConn = RunService.Heartbeat:Connect(function()
+			if not statusBox then return end
+			statusBox.Visible = State.Ragebot
+			if State.Ragebot then statusLabel.Text = ragebotStatus() end
+		end)
+
+		posBox = new("Frame", {
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -10, 0, 146),
+			Size = UDim2.fromOffset(210, 108),
+			BackgroundColor3 = Color3.fromRGB(14, 14, 20),
+			BackgroundTransparency = 0.25,
+			BorderSizePixel = 0,
+			Visible = false,
+			Parent = hud,
+		})
+		corner(posBox, 10)
+		stroke(posBox, Theme.Stroke)
+		posLabel = text(posBox, "", 13, Theme.Text, Enum.Font.Code, {
+			Position = UDim2.fromOffset(10, 6),
+			Size = UDim2.new(1, -20, 1, -12),
+		})
+		posLabel.TextXAlignment = Enum.TextXAlignment.Left
+		posLabel.TextYAlignment = Enum.TextYAlignment.Top
+	end
+
+	function M.SetPosition(on)
+		if not posBox then return end
+		posBox.Visible = on
+		if conn1 then conn1:Disconnect() conn1 = nil end
+		if conn2 then conn2:Disconnect() conn2 = nil end
+		if on then
+			conn1 = RunService.RenderStepped:Connect(refresh)
+			conn2 = RunService.Heartbeat:Connect(refresh)
+		end
+	end
+
+	function M.SetWatermark(on)
+		if mark then mark.Visible = on end
+	end
+
+	function M.Shutdown()
+		if conn1 then conn1:Disconnect() conn1 = nil end
+		if conn2 then conn2:Disconnect() conn2 = nil end
+		if statusConn then statusConn:Disconnect() statusConn = nil end
+		if hud then
+			hud:Destroy()
+			hud = nil
+		end
+	end
+
+	return M
+end)()
+
+---------------------------------------------------------------------
+-- CONFIG (json files in executor workspace, folder kept as LinuxHub
+-- so previously saved configs still load)
+---------------------------------------------------------------------
+local Config = (function()
+	local M = {}
+	local HttpService = game:GetService("HttpService")
+	local ROOT = "LinuxHub"
+	local DIR = "LinuxHub/configs"
+	M.Dir = DIR
+
+	local function hasFS()
+		return typeof(writefile) == "function" and typeof(readfile) == "function"
+			and typeof(isfile) == "function" and typeof(isfolder) == "function"
+			and typeof(makefolder) == "function" and typeof(listfiles) == "function"
+			and typeof(delfile) == "function"
+	end
+	M.Available = hasFS
+
+	local function ensureDir()
+		if not isfolder(ROOT) then makefolder(ROOT) end
+		if not isfolder(DIR) then makefolder(DIR) end
+	end
+
+	local function clean(name)
+		name = tostring(name or "")
+		name = string.gsub(name, "[^%w_%- ]", "")
+		name = string.gsub(name, "^%s+", "")
+		name = string.gsub(name, "%s+$", "")
+		return string.sub(name, 1, 32)
+	end
+
+	local function path(name)
+		return DIR .. "/" .. name .. ".json"
+	end
+
+	local function collect()
+		local flags = {}
+		for key, entry in pairs(Flags) do
+			flags[key] = entry.obj:Get()
+		end
+		return { version = 1, flags = flags }
+	end
+
+	local EXPECT = { toggle = "boolean", slider = "number", dropdown = "string", textbox = "string" }
+
+	function M.List()
+		local names = {}
+		if not hasFS() then return names end
+		pcall(ensureDir)
+		local ok, files = pcall(listfiles, DIR)
+		if ok and type(files) == "table" then
+			for _, f in ipairs(files) do
+				local n = string.match(tostring(f), "([^/\\]+)%.json$")
+				if n then table.insert(names, n) end
+			end
+		end
+		table.sort(names)
+		return names
+	end
+
+	local function write(name)
+		local ok, err = pcall(function()
+			ensureDir()
+			writefile(path(name), HttpService:JSONEncode(collect()))
+		end)
+		if ok then return true, name end
+		return false, tostring(err)
+	end
+
+	function M.Create(name)
+		if not hasFS() then return false, "executor has no file api" end
+		name = clean(name)
+		if name == "" then return false, "enter a name first" end
+		ensureDir()
+		if isfile(path(name)) then return false, name .. " already exists, use Overwrite" end
+		return write(name)
+	end
+
+	function M.Overwrite(name)
+		if not hasFS() then return false, "executor has no file api" end
+		name = clean(name)
+		if name == "" or not isfile(path(name)) then return false, "config does not exist yet, use Create" end
+		return write(name)
+	end
+
+	function M.Delete(name)
+		if not hasFS() then return false, "executor has no file api" end
+		name = clean(name)
+		if name == "" or not isfile(path(name)) then return false, "config does not exist" end
+		local ok, err = pcall(delfile, path(name))
+		if ok then return true, name end
+		return false, tostring(err)
+	end
+
+	function M.Load(name)
+		if not hasFS() then return false, "executor has no file api" end
+		name = clean(name)
+		if name == "" or not isfile(path(name)) then return false, "config does not exist" end
+		local ok, data = pcall(function()
+			return HttpService:JSONDecode(readfile(path(name)))
+		end)
+		if not ok or type(data) ~= "table" or type(data.flags) ~= "table" then
+			return false, "config file is corrupt"
+		end
+		local applied = 0
+		for key, value in pairs(data.flags) do
+			local entry = Flags[key]
+			if entry and type(value) == EXPECT[entry.kind] then
+				if pcall(function() entry.obj:Set(value) end) then applied = applied + 1 end
+			end
+		end
+		return true, applied
+	end
+
+	return M
+end)()
+
+---------------------------------------------------------------------
+-- UI BUILD
+---------------------------------------------------------------------
+local function bindFlag(key, kind, getter, setter)
+	if not key then return end
+	Flags[key] = {
+		kind = kind,
+		obj = {
+			Get = function() return getter() end,
+			Set = function(_, v) setter(v) end,
+		},
+	}
+end
+
+-- best-effort visual sync on config load; gameplay always applies even
+-- if this build of the library exposes no element setter
+local function trySet(el, v)
+	for _, m in ipairs({ "set", "Set", "set_value", "update_value" }) do
+		if type(el[m]) == "function" then
+			local ok = pcall(el[m], el, v)
+			if ok then return true end
+		end
+	end
+	return false
+end
+
+local function uiToggle(sec, o)
+	local value = o.default == true
+	local el = sec:toggle({
+		name = o.name,
+		default = value,
+		info = o.info,
+		seperator = o.seperator,
+		callback = function(state)
+			if type(state) ~= "boolean" or state == value then return end
+			value = state
+			if o.callback then task.spawn(o.callback, state) end
+		end,
+	})
+	if o.flag then
+		bindFlag(o.flag, "toggle", function() return value end, function(v)
+			value = v
+			if o.callback then task.spawn(o.callback, v) end
+			trySet(el, v)
+		end)
+	end
+	return el
+end
+
+local function uiSlider(sec, o)
+	local value = o.default
+	local el = sec:slider({
+		name = o.name,
+		min = o.min,
+		max = o.max,
+		interval = o.step or 1,
+		default = o.default,
+		suffix = o.suffix or "",
+		seperator = o.seperator,
+		callback = function(v)
+			if type(v) ~= "number" or v == value then return end
+			value = v
+			if o.callback then task.spawn(o.callback, v) end
+		end,
+	})
+	if o.flag then
+		bindFlag(o.flag, "slider", function() return value end, function(v)
+			value = v
+			if o.callback then task.spawn(o.callback, v) end
+			trySet(el, v)
+		end)
+	end
+	return el
+end
+
+local function uiDropdown(sec, o)
+	local value = o.default
+	local el = sec:dropdown({
+		name = o.name,
+		items = o.items,
+		default = o.default,
+		multi = o.multi,
+		seperator = o.seperator,
+		callback = function(choice)
+			if choice == nil or choice == value then return end
+			value = choice
+			if o.callback then task.spawn(o.callback, choice) end
+		end,
+	})
+	if o.flag then
+		bindFlag(o.flag, "dropdown", function() return value end, function(v)
+			value = v
+			if o.callback then task.spawn(o.callback, v) end
+			trySet(el, v)
+		end)
+	end
+	return el
+end
+
+local function uiTextbox(sec, o)
+	local value = o.default or ""
+	local el = sec:textbox({
+		name = o.name,
+		placeholder = o.placeholder,
+		callback = function(txt)
+			if type(txt) ~= "string" or txt == value then return end
+			value = txt
+			if o.callback then task.spawn(o.callback, txt) end
+		end,
+	})
+	if o.flag then
+		bindFlag(o.flag, "textbox", function() return value end, function(v)
+			value = v
+			if o.callback then task.spawn(o.callback, v) end
+			trySet(el, v)
+		end)
+	end
+	return el
+end
+
+-- route the old Baiting notify() calls into the library notifications
+notifyWin = {
+	Notify = function(_, o)
+		if type(o) ~= "table" then return end
+		khubNotify(o.Title or "kawaii.gg", tostring(o.Content or ""))
+	end,
+}
+
+HUD.Bind()
+
+---------------------------------------------------------------------
+-- MAIN TAB
+---------------------------------------------------------------------
+window:seperator({ name = "Main" })
+local mainTab = window:tab({ name = "Main", tabs = { "Main" } })
+local mainCol = mainTab:column({})
+
+local rageSec = mainCol:section({ name = "Ragebot", default = true })
+
+uiToggle(rageSec, {
+	name = "Ragebot",
+	default = false,
+	callback = function(state)
+		State.Ragebot = state
+		if state then
+			startMethod()
+			khubNotify("Ragebot", "ON - " .. State.Method)
+		else
+			stopMethod()
+			khubNotify("Ragebot", "OFF")
+		end
+	end,
+})
+
+uiDropdown(rageSec, {
+	name = "Method",
+	flag = "rage_method",
+	items = { "Underground", "UE Counter", "Baiting", "Classic" },
+	default = "Underground",
+	callback = function(choice)
+		local wasOn = State.Ragebot
+		if wasOn then stopMethod() end
+		State.Method = choice
+		if wasOn then startMethod() end
+		khubNotify("Method", choice)
+	end,
+})
+
+uiSlider(rageSec, {
+	name = "Underground Depth", flag = "rage_depth",
+	min = 2, max = 25, step = 1, default = State.Depth, suffix = " studs",
+	callback = function(v) State.Depth = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Underground Range", flag = "rage_ugrange",
+	min = 1, max = 15, step = 0.5, default = State.UndergroundRange, suffix = " studs",
+	callback = function(v) State.UndergroundRange = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Underground Speed", flag = "rage_ugspeed",
+	min = 1, max = 60, step = 1, default = State.UndergroundSpeed, suffix = " /s",
+	callback = function(v) State.UndergroundSpeed = v end,
+})
+
+uiSlider(rageSec, {
+	name = "UE Y Distance", flag = "rage_uey",
+	min = 50, max = 500, step = 10, default = State.UE_Y, suffix = " studs",
+	callback = function(v) State.UE_Y = v end,
+})
+
+uiSlider(rageSec, {
+	name = "UE Cooldown", flag = "rage_uecd",
+	min = 0.05, max = 1, step = 0.05, default = State.UE_Cooldown, suffix = " s",
+	callback = function(v) State.UE_Cooldown = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Bait Depth", flag = "rage_bait",
+	min = 5, max = 400, step = 1, default = State.BaitDistance, suffix = " studs",
+	callback = function(v)
+		State.BaitDistance = v
+		if Bait.active then updateBait() end
+	end,
+})
+
+uiDropdown(rageSec, {
+	name = "Classic Mode",
+	flag = "rage_classic_mode",
+	items = { "Default", "Melee Orbit", "Knife Backstab" },
+	default = State.ClassicMode,
+	callback = function(choice) State.ClassicMode = choice end,
+})
+
+uiSlider(rageSec, {
+	name = "Classic Offset", flag = "rage_classic_offset",
+	min = 0, max = 15, step = 0.5, default = State.ClassicOffset, suffix = " studs",
+	callback = function(v) State.ClassicOffset = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Orbit Speed", flag = "rage_classic_orbitspeed",
+	min = 30, max = 720, step = 10, default = State.ClassicOrbitSpeed, suffix = " deg/s",
+	callback = function(v) State.ClassicOrbitSpeed = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Backstab Click Rate", flag = "rage_classic_backstabrate",
+	min = 0.05, max = 0.6, step = 0.05, default = State.ClassicBackstabRate, suffix = " s",
+	callback = function(v) State.ClassicBackstabRate = v end,
+})
+
+uiToggle(rageSec, {
+	name = "Classic Team Check",
+	flag = "rage_classic_team",
+	default = State.ClassicTeamCheck,
+	callback = function(state) State.ClassicTeamCheck = state end,
+})
+
+uiToggle(rageSec, {
+	name = "Primary Fix",
+	flag = "rage_primaryfix",
+	default = false,
+	callback = function(state) State.PrimaryFix = state end,
+})
+
+uiSlider(rageSec, {
+	name = "Primary Fix Reaction", flag = "rage_primaryreact",
+	min = 0, max = 0.3, step = 0.01, default = State.PrimaryReaction, suffix = " s",
+	callback = function(v) State.PrimaryReaction = v end,
+})
+
+uiToggle(rageSec, {
+	name = "Voidspam",
+	flag = "rage_voidspam",
+	default = false,
+	callback = function(state)
+		State.Voidspam = state
+		if state then
+			if State.Ragebot then startVoidGate() end
+			khubNotify("Voidspam", "Layered onto " .. State.Method)
+		else
+			stopVoidGate()
+			khubNotify("Voidspam", "Off, " .. State.Method .. " back in control")
+		end
+	end,
+})
+
+uiSlider(rageSec, {
+	name = "Voidspam Distance", flag = "rage_voiddist",
+	min = 500, max = 100000, step = 500, default = State.VoidDistance, suffix = " studs",
+	callback = function(v) State.VoidDistance = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Voidspam Time", flag = "rage_voidtime",
+	min = 0.1, max = 5, step = 0.1, default = State.VoidTime, suffix = " s",
+	callback = function(v) State.VoidTime = v end,
+})
+
+uiSlider(rageSec, {
+	name = "Voidspam Home Time", flag = "rage_voidhome",
+	min = 0.1, max = 5, step = 0.1, default = State.VoidHomeTime, suffix = " s",
+	callback = function(v) State.VoidHomeTime = v end,
+})
+
+local combatSec = mainCol:section({ name = "Combat", default = true })
+
+uiToggle(combatSec, {
+	name = "Fast Shoot",
+	flag = "fast_shoot",
+	default = false,
+	callback = function(state)
+		State.FastShoot = state
+		applyFastShoot(state)
+		khubNotify("Fast Shoot", state and "ON (guns + melee)" or "OFF")
+	end,
+})
+
+local miscSec = mainCol:section({ name = "Misc", default = true })
+
+uiToggle(miscSec, {
+	name = "Hitbox Smaller",
+	flag = "hitbox_smaller",
+	default = false,
+	callback = function(state)
+		State.HitboxSmaller = state
+		applyHitboxSmaller(state)
+		khubNotify("Hitbox", state and "Smaller (lay-down)" or "Normal")
+	end,
+})
+
+uiToggle(miscSec, {
+	name = "Fake Position",
+	flag = "fake_pos",
+	default = false,
+	callback = function(state)
+		State.FakePosition = state
+		if state then
+			startFakePosition()
+			khubNotify("Fake Position", "Active")
+		else
+			stopFakePosition()
+			khubNotify("Fake Position", "Disabled")
+		end
+	end,
+})
+
+uiToggle(miscSec, {
+	name = "Show Position",
+	flag = "show_pos",
+	default = false,
+	callback = function(state) HUD.SetPosition(state) end,
+})
+
+---------------------------------------------------------------------
+-- LEGIT TAB
+---------------------------------------------------------------------
+local GS = Legit.State
+
+local function lToggle(sec, name, key)
+	return uiToggle(sec, {
+		name = name,
+		flag = "legit_" .. key,
+		default = GS[key] == true,
+		callback = function(state)
+			GS[key] = state
+			Legit.Update()
+		end,
+	})
+end
+
+local function lSlider(sec, name, key, min, max, step, suffix)
+	return uiSlider(sec, {
+		name = name,
+		flag = "legit_" .. key,
+		min = min, max = max, step = step,
+		default = GS[key],
+		suffix = suffix,
+		callback = function(v)
+			GS[key] = v
+			Legit.Update()
+		end,
+	})
+end
+
+local function lDrop(sec, name, key, options)
+	return uiDropdown(sec, {
+		name = name,
+		flag = "legit_" .. key,
+		items = options,
+		default = GS[key],
+		callback = function(choice)
+			GS[key] = choice
+			Legit.Update()
+		end,
+	})
+end
+
+window:seperator({ name = "Legit" })
+local legitTab = window:tab({ name = "Legit", tabs = { "Legit" } })
+local legitCol = legitTab:column({})
+
+local aimSec = legitCol:section({ name = "Aimbot", default = true })
+lToggle(aimSec, "Aimbot", "Aimbot")
+aimSec:label({ name = "Controls", info = "PC: hold right-click to aim. Mobile: toggle alone drives it." })
+lSlider(aimSec, "Aim FOV", "AimFov", 2, 60, 1, " deg")
+lToggle(aimSec, "Show FOV Circle", "AimShowFov")
+lSlider(aimSec, "Smoothness", "AimSmooth", 0, 0.9, 0.05)
+lToggle(aimSec, "Visible Check", "AimVisibleCheck")
+lToggle(aimSec, "Team Check", "AimTeamCheck")
+lDrop(aimSec, "Aim Bone", "AimBone", Legit.BoneNames)
+
+local silentSec = legitCol:section({ name = "Silent Aim", default = true })
+lToggle(silentSec, "Silent Aim", "SilentAim")
+silentSec:label({ name = "Note", info = "Guaranteed on Triggerbot/Primary Fix shots. Manual clicks are best-effort." })
+lSlider(silentSec, "Silent FOV", "SilentFov", 2, 60, 1, " deg")
+lSlider(silentSec, "Hit Chance", "SilentHitChance", 0, 100, 1, "%")
+
+local trigSec = legitCol:section({ name = "Triggerbot", default = true })
+lToggle(trigSec, "Triggerbot", "Triggerbot")
+lSlider(trigSec, "Reaction Time", "TriggerReaction", 0, 0.5, 0.01, " s")
+lToggle(trigSec, "Team Check", "TriggerTeamCheck")
+
+local espSec = legitCol:section({ name = "ESP", default = true })
+lToggle(espSec, "ESP", "Esp")
+lToggle(espSec, "Skeleton", "EspSkeleton")
+lToggle(espSec, "Tracers", "EspTracer")
+lToggle(espSec, "Health Bar", "EspHealth")
+lToggle(espSec, "Name + Distance", "EspName")
+lToggle(espSec, "Visible Color", "EspVisibleColor")
+lToggle(espSec, "Team Check", "EspTeamCheck")
+lSlider(espSec, "Max Distance", "EspMaxDist", 100, 10000, 100, " studs")
+
+---------------------------------------------------------------------
+-- VISUALS TAB
+---------------------------------------------------------------------
+local VS = Visuals.State
+
+local function vToggle(sec, name, key)
+	return uiToggle(sec, {
+		name = name,
+		flag = "vis_" .. key,
+		default = VS[key] == true,
+		callback = function(state)
+			VS[key] = state
+			Visuals.Update()
+		end,
+	})
+end
+
+local function vSlider(sec, name, key, min, max, step, suffix)
+	return uiSlider(sec, {
+		name = name,
+		flag = "vis_" .. key,
+		min = min, max = max, step = step,
+		default = VS[key],
+		suffix = suffix,
+		callback = function(v)
+			VS[key] = v
+			Visuals.Update()
+		end,
+	})
+end
+
+local function vDrop(sec, name, key, options)
+	return uiDropdown(sec, {
+		name = name,
+		flag = "vis_" .. key,
+		items = options,
+		default = VS[key],
+		callback = function(choice)
+			VS[key] = choice
+			Visuals.Update()
+		end,
+	})
+end
+
+window:seperator({ name = "Visuals" })
+local skyPage, fxPage, camPage = window:tab({
+	name = "Visuals",
+	tabs = { "Sky", "Effects", "Camera" },
+})
+
+-- sky page
+local skyCol = skyPage:column({})
+local skySec = skyCol:section({ name = "Skybox", default = true })
+vToggle(skySec, "Custom Sky", "Sky")
+vDrop(skySec, "Preset", "SkyPreset", Visuals.SkyNames)
+uiTextbox(skySec, {
+	name = "Sky IDs",
+	flag = "vis_skyids",
+	placeholder = "1 id, or 6: bk dn ft lf rt up",
+	callback = function(txt)
+		VS.SkyIds = txt
+		Visuals.Update()
+	end,
+})
+
+local ambSec = skyCol:section({ name = "Ambience", default = true })
+vToggle(ambSec, "Custom Ambience", "Ambience")
+vDrop(ambSec, "Ambient Color", "AmbientColor", Visuals.ColorNames)
+vSlider(ambSec, "Brightness", "Brightness", 0, 5, 0.1)
+vSlider(ambSec, "Exposure", "Exposure", -3, 3, 0.1)
+vToggle(ambSec, "Rainbow Ambient", "Rainbow")
+vSlider(ambSec, "Rainbow Speed", "RainbowSpeed", 0.05, 1, 0.05)
+
+local fogSec = skyCol:section({ name = "Fog", default = true })
+vToggle(fogSec, "Custom Fog", "Fog")
+vDrop(fogSec, "Fog Color", "FogColor", Visuals.ColorNames)
+vSlider(fogSec, "Fog Start", "FogStart", 0, 1000, 10, " studs")
+vSlider(fogSec, "Fog End", "FogEnd", 50, 5000, 50, " studs")
+
+-- effects page
+local fxCol = fxPage:column({})
+local bloomSec = fxCol:section({ name = "Bloom / Color / Rays", default = true })
+vToggle(bloomSec, "Bloom", "Bloom")
+vSlider(bloomSec, "Bloom Intensity", "BloomIntensity", 0, 5, 0.1)
+vSlider(bloomSec, "Bloom Size", "BloomSize", 0, 56, 1)
+vSlider(bloomSec, "Bloom Threshold", "BloomThreshold", 0, 2, 0.05)
+vToggle(bloomSec, "Color Correction", "Color")
+vSlider(bloomSec, "Saturation", "Saturation", -1, 2, 0.05)
+vSlider(bloomSec, "Contrast", "Contrast", -1, 1, 0.05)
+vSlider(bloomSec, "CC Brightness", "CCBrightness", -0.5, 0.5, 0.01)
+vDrop(bloomSec, "Tint", "Tint", Visuals.ColorNames)
+vToggle(bloomSec, "Sun Rays", "Rays")
+vSlider(bloomSec, "Rays Intensity", "RaysIntensity", 0, 1, 0.05)
+vSlider(bloomSec, "Rays Spread", "RaysSpread", 0, 1, 0.05)
+
+local auroraSec = fxCol:section({ name = "Aurora", default = true })
+vToggle(auroraSec, "Aurora", "Aurora")
+vSlider(auroraSec, "Intensity", "AuroraIntensity", 0.1, 1, 0.05)
+vSlider(auroraSec, "Speed", "AuroraSpeed", 0.1, 4, 0.1)
+vSlider(auroraSec, "Height", "AuroraHeight", 150, 800, 10, " studs")
+
+-- camera page
+local camCol = camPage:column({})
+local camSec = camCol:section({ name = "Camera", default = true })
+vToggle(camSec, "Third Person", "ThirdPerson")
+vSlider(camSec, "Distance", "TPDistance", 2, 40, 1, " studs")
+vSlider(camSec, "Side Offset", "TPX", -10, 10, 0.5)
+vSlider(camSec, "Height Offset", "TPY", -5, 10, 0.5)
+vToggle(camSec, "Custom FOV", "Fov")
+vSlider(camSec, "Camera FOV", "FovValue", 30, 120, 1)
+
+local worldSec = camCol:section({ name = "World", default = true })
+vToggle(worldSec, "Fullbright", "Fullbright")
+vToggle(worldSec, "No Shadows", "NoShadows")
+vToggle(worldSec, "Lock Time", "ClockLock")
+vSlider(worldSec, "Time", "ClockTime", 0, 24, 0.1)
+
+---------------------------------------------------------------------
+-- SETTINGS TAB
+---------------------------------------------------------------------
+local PRESETS = {
+	Purple = Color3.fromRGB(108, 92, 255),
+	Blue = Color3.fromRGB(60, 130, 255),
+	Cyan = Color3.fromRGB(40, 210, 220),
+	Green = Color3.fromRGB(70, 200, 130),
+	Pink = ACCENT,
+	Red = Color3.fromRGB(235, 80, 90),
+	Orange = Color3.fromRGB(255, 150, 60),
+	Yellow = Color3.fromRGB(240, 200, 60),
+}
+local PRESET_NAMES = { "Purple", "Blue", "Cyan", "Green", "Pink", "Red", "Orange", "Yellow" }
+
+local currentAccent = ACCENT
+local function setAccent(c)
+	if typeof(c) ~= "Color3" then return end
+	pcall(function() Library:update_theme("accent", c) end)
+	pcall(function() window:update_theme("accent", c) end)
+	recolorAccent(currentAccent, c)
+	currentAccent = c
+	Theme.Accent = c
+end
+
+local rgb = {
+	on = false, speed = 0.5, conn = nil, scan = 0,
+	orig = setmetatable({}, { __mode = "k" }),
+	list = {},
+}
+
+local function rgbCollect()
+	rgb.list = {}
+	if not itemsGui then return end
+	for _, d in ipairs(itemsGui:GetDescendants()) do
+		if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+			table.insert(rgb.list, d)
+			if rgb.orig[d] == nil then rgb.orig[d] = d.TextColor3 end
+		end
+	end
+end
+
+local function rgbStep()
+	local now = os.clock()
+	if now - rgb.scan > 0.5 then
+		rgb.scan = now
+		rgbCollect()
+	end
+	local base = now * rgb.speed
+	for _, d in ipairs(rgb.list) do
+		if d.Parent then
+			local p = d.AbsolutePosition
+			d.TextColor3 = Color3.fromHSV((base + p.X / 900 + p.Y / 700) % 1, 0.75, 1)
+		end
+	end
+end
+
+local function setRGB(on)
+	if on == rgb.on then return end
+	rgb.on = on
+	if on then
+		rgb.scan = 0
+		rgbCollect()
+		rgb.conn = RunService.RenderStepped:Connect(rgbStep)
+	else
+		if rgb.conn then rgb.conn:Disconnect() rgb.conn = nil end
+		for d, c in pairs(rgb.orig) do
+			if d.Parent then d.TextColor3 = c end
+		end
+		rgb.orig = setmetatable({}, { __mode = "k" })
+		rgb.list = {}
+	end
+end
+
+window:seperator({ name = "Settings" })
+local uiPage, cfgPage = window:tab({ name = "Settings", tabs = { "UI", "Configs" } })
+
+-- UI page
+local uiCol = uiPage:column({})
+local themeSec = uiCol:section({ name = "Theme", default = true })
+
+uiDropdown(themeSec, {
+	name = "Accent Preset",
+	flag = "ui_preset",
+	items = PRESET_NAMES,
+	default = "Pink",
+	callback = function(choice)
+		local c = PRESETS[choice]
+		if c then setAccent(c) end
+	end,
+})
+
+uiToggle(themeSec, {
+	name = "RGB Text",
+	flag = "ui_rgb",
+	default = false,
+	callback = function(state) setRGB(state) end,
+})
+
+uiSlider(themeSec, {
+	name = "RGB Speed", flag = "ui_rgbspeed",
+	min = 0.1, max = 3, step = 0.1, default = 0.5,
+	callback = function(v) rgb.speed = v end,
+})
+
+uiToggle(themeSec, {
+	name = "Watermark",
+	flag = "watermark",
+	default = true,
+	callback = function(state) HUD.SetWatermark(state) end,
+})
+
+-- configs page
+local cfgCol = cfgPage:column({})
+local cfgSec = cfgCol:section({ name = "Config", default = true })
+cfgSec:label({ name = "Folder", info = Config.Dir })
+
+local cfgValue = { text = "" }
+uiTextbox(cfgSec, {
+	name = "Config Name",
+	placeholder = "new config name",
+	callback = function(txt) cfgValue.text = tostring(txt or "") end,
+})
+
+local function cfgNotify(ok, msg, okText)
+	khubNotify("Config", ok and okText or tostring(msg))
+end
+
+cfgSec:button({
+	name = "Create Config",
+	callback = function()
+		local ok, res = Config.Create(cfgValue.text)
+		cfgNotify(ok, res, "Created " .. tostring(res))
+	end,
+})
+
+cfgSec:button({
+	name = "Load Config",
+	callback = function()
+		local ok, res = Config.Load(cfgValue.text)
+		cfgNotify(ok, res, "Loaded " .. tostring(res) .. " settings")
+	end,
+})
+
+cfgSec:button({
+	name = "Overwrite Config",
+	callback = function()
+		local ok, res = Config.Overwrite(cfgValue.text)
+		cfgNotify(ok, res, "Saved over " .. tostring(res))
+	end,
+})
+
+cfgSec:button({
+	name = "Delete Config",
+	callback = function()
+		local ok, res = Config.Delete(cfgValue.text)
+		cfgNotify(ok, res, "Deleted " .. tostring(res))
+	end,
+})
+
+cfgSec:button({
+	name = "List Configs",
+	callback = function()
+		local names = Config.List()
+		if #names == 0 then
+			khubNotify("Config", "no configs saved yet")
+			return
+		end
+		local shown = {}
+		for i = 1, math.min(#names, 10) do shown[i] = names[i] end
+		local extra = #names > 10 and (" +" .. (#names - 10) .. " more") or ""
+		khubNotify("Config", table.concat(shown, ", ") .. extra)
+	end,
+})
+
+---------------------------------------------------------------------
+-- DESTROY HANDLE
+---------------------------------------------------------------------
+_G.KawaiiDestroy = function()
+	pcall(function()
+		State.Ragebot = false
+		State.PrimaryFix = false
+		if State.FastShoot then
+			State.FastShoot = false
+			applyFastShoot(false)
+		end
+		stopMethod()
+		if State.HitboxSmaller then
+			State.HitboxSmaller = false
+			applyHitboxSmaller(false)
+		end
+		State.FakePosition = false
+		stopFakePosition()
+		Visuals.Shutdown()
+		Legit.Shutdown()
+		HUD.Shutdown()
+		if rgb.conn then rgb.conn:Disconnect() rgb.conn = nil end
+		for _, c in ipairs(uiConns) do pcall(function() c:Disconnect() end) end
+		table.clear(uiConns)
+		if respawnConn then respawnConn:Disconnect() end
+		if itemsGui then itemsGui:Destroy() end
+	end)
+end
+
+---------------------------------------------------------------------
+-- BOOT
+---------------------------------------------------------------------
+task.delay(1.5, function()
+	khubNotify("kawaii.gg", "Loaded! RightShift toggles the menu.")
+end)
+
+pcall(function() Library:init_config(window) end)
+task.delay(1, function() recolorAccent(OLD_ACCENT, ACCENT) end)
+
+log("script running")
