@@ -1,4 +1,4 @@
-aw--[[
+--[[
     kawaii.gg
     LinuxHub core (ragebot / legit / visuals / configs)
     mounted on the Sleepy Hub UI library, kawaii skin
