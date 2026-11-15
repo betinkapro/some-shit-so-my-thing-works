@@ -254,6 +254,10 @@ function loadMain(isMobile)
     itemsGui.IgnoreGuiInset = true
     itemsGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 
+    local mobileScale = Instance.new("UIScale")
+    mobileScale.Parent = win
+    mobileScale.Scale = isMobile and 0.85 or 1
+
     local function layoutWindow()
         local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
         local w, h
@@ -269,7 +273,33 @@ function loadMain(isMobile)
         win.Size        = UDim2.fromOffset(w, h)
         win.Position    = UDim2.fromOffset(math.floor((vp.X - w) / 2), math.floor((vp.Y - h) / 2))
         win.Visible = true
+        win.AutomaticSize = Enum.AutomaticSize.None
+        win.ClipsDescendants = true
     end
+
+    local function forceScroll()
+        for _, d in ipairs(win:GetDescendants()) do
+            if d:IsA("ScrollingFrame") then
+                d.ClipsDescendants = true
+                d.ScrollingEnabled = true
+                d.AutomaticCanvasSize = Enum.AutomaticSize.Y
+                d.ScrollBarThickness = 4
+            end
+        end
+    end
+
+    forceScroll()
+    
+    win.DescendantAdded:Connect(function(d)
+        if d:IsA("ScrollingFrame") then
+            task.defer(function()
+                d.ClipsDescendants = true
+                d.ScrollingEnabled = true
+                d.AutomaticCanvasSize = Enum.AutomaticSize.Y
+                d.ScrollBarThickness = 4
+            end)
+        end
+    end)
 
     local PNG_SIG = string.char(137, 80, 78, 71, 13, 10, 26, 10)
 
@@ -337,33 +367,6 @@ function loadMain(isMobile)
         return false
     end
 
-    local function applyPanels()
-        for _, d in ipairs(win:GetDescendants()) do
-            if (d:IsA("Frame") or d:IsA("ImageButton") or d:IsA("TextButton")) and not inBackground(d) then
-                local size = d.AbsoluteSize
-                if size.X > 0 and size.Y > 0 then
-                    local area = size.X * size.Y
-                    if area >= ASSET.panel_area then
-                        if d.BackgroundTransparency < ASSET.panel_alpha then d.BackgroundTransparency = ASSET.panel_alpha end
-                    else
-                        if d.BackgroundTransparency < ASSET.button_alpha then d.BackgroundTransparency = ASSET.button_alpha end
-                    end
-                end
-            end
-        end
-    end
-
-    local function keepPanelsTransparent()
-        applyPanels()
-        local t0 = os.clock()
-        local conn
-        conn = track(RunService.Heartbeat:Connect(function()
-            if os.clock() - t0 > 20 then conn:Disconnect() return end
-            applyPanels()
-        end))
-        track(win.DescendantAdded:Connect(function() task.delay(0.3, applyPanels) end))
-    end
-
     local bgLabel, bgHolder
 
     local function layoutImage()
@@ -402,15 +405,15 @@ function loadMain(isMobile)
         layoutWindow()
 
         local path, err = downloadBackground()
-        if not path then keepPanelsTransparent() return end
+        if not path then return end
 
         local asset = resolveCustom(path)
-        if not asset then keepPanelsTransparent() return end
+        if not asset then return end
 
         bgHolder = Instance.new("Frame")
         bgHolder.Name = "KawaiiBackgroundHolder"
         bgHolder.ZIndex = 0
-        bgHolder.LayoutOrder = -9999 -- Prevent UIListLayout from pushing it
+        bgHolder.LayoutOrder = -9999
         bgHolder.Size = UDim2.fromScale(1, 1)
         bgHolder.Position = UDim2.fromScale(0, 0)
         bgHolder.BackgroundTransparency = 1
@@ -455,8 +458,6 @@ function loadMain(isMobile)
                 layoutImage()
             end))
         end
-        task.wait(0.3)
-        keepPanelsTransparent()
     end)
 
     local menuOpen = true
@@ -538,7 +539,8 @@ function loadMain(isMobile)
         BaitDistance = 30, ClassicOffset = 0, ClassicTeamCheck = true, ClassicMode = "Default",
         ClassicOrbitSpeed = 220, ClassicBackstabRate = 0.15, VoidDistance = 2000000000,
         PrimaryFix = false, PrimaryReaction = 0.03, Voidspam = false, VoidTime = 0.05, VoidHomeTime = 0.05, LastFire = 0,
-        CSync = false,
+        CSync = false, VoidKill = false, Gluer = false, Counters = false, CounterType = "Kicia Prem",
+        TimingFixer = true,
     }
 
     local Flags = {}
@@ -550,6 +552,7 @@ function loadMain(isMobile)
     local fakePart = nil
     local fakeConn = nil
     local fakeOffsetY = 12
+    local lastGlobalClick = 0
 
     local function getCharacter() return player.Character end
     local function getRoot(char) return char and char:FindFirstChild("HumanoidRootPart") end
@@ -570,6 +573,8 @@ function loadMain(isMobile)
     local Combat = (function()
         local M = {}
         function M.Click()
+            if os.clock() - lastGlobalClick < 0.05 then return false end
+            lastGlobalClick = os.clock()
             State.LastFire = os.clock()
             if typeof(mouse1click) == "function" then if pcall(mouse1click) then return true end end
             if typeof(mouse1press) == "function" and typeof(mouse1release) == "function" then
@@ -1044,13 +1049,66 @@ function loadMain(isMobile)
 
     local CSync = { lastClick = 0, conn = nil }
     local function startCSync()
-        if CSync.conn then return end
-        CSync.conn = RunService.Heartbeat:Connect(function()
-            if not State.Ragebot or not State.CSync then return end
-            local char = getCharacter()
-            local root, hum = getRoot(char), getHumanoid(char)
-            if not root or not hum or hum.Health <= 0 then return end
-            
+        -- Integrated into PriorityLock
+    end
+    local function stopCSync()
+        -- Integrated into PriorityLock
+    end
+
+    -- NEW MECHANICS: Void Kill, Gluer, Counters
+    RunService.Heartbeat:Connect(function()
+        if not State.Ragebot then return end
+        local char = getCharacter()
+        local root, hum = getRoot(char), getHumanoid(char)
+        if not root or not hum or hum.Health <= 0 then return end
+
+        if State.VoidKill then
+            claimOwnership(root)
+            local base = root.Position
+            local t = os.clock() * 50
+            local y = 500 + math.sin(t) * 100
+            root.CFrame = CFrame.new(base.X, y, base.Z)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            Combat.Click()
+            return
+        end
+
+        if State.Gluer then
+            local target = Combat.FovTarget(360, true, false)
+            if target and target.root then
+                claimOwnership(root)
+                root.CFrame = target.root.CFrame
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                hum.PlatformStand = true
+                return
+            end
+        end
+
+        if State.Counters then
+            local target = Combat.FovTarget(360, true, false)
+            if target and target.root then
+                claimOwnership(root)
+                if State.CounterType == "Kicia Prem" then
+                    root.CFrame = target.root.CFrame * CFrame.new(0, 15, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+                    Combat.Click()
+                elseif State.CounterType == "Sleepy" then
+                    root.CFrame = target.root.CFrame * CFrame.new(0, -4, 0)
+                    Combat.Click()
+                elseif State.CounterType == "Nebu" then
+                    root.CFrame = target.root.CFrame * CFrame.new(0, -4, 0)
+                elseif State.CounterType == "UE" then
+                    root.CFrame = target.root.CFrame * CFrame.new(0, 500, 0)
+                end
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                hum.PlatformStand = true
+                return
+            end
+        end
+
+        if State.CSync then
             local target = Combat.FovTarget(360, true, false)
             if target and target.root then
                 claimOwnership(root)
@@ -1065,14 +1123,14 @@ function loadMain(isMobile)
                     CSync.lastClick = now
                 end
             end
-        end)
-    end
-    local function stopCSync()
-        if CSync.conn then CSync.conn:Disconnect() CSync.conn = nil end
-    end
+        end
+    end)
 
     local function ragebotStatus()
         if not State.Ragebot then return "Ragebot: Off" end
+        if State.VoidKill then return "Ragebot: Void Kill" end
+        if State.Gluer then return "Ragebot: Gluing" end
+        if State.Counters then return "Ragebot: Countering " .. State.CounterType end
         if State.CSync then return "Ragebot: CSync" end
         if State.Voidspam and VoidGate.phase == "spam" then return "Ragebot: Voidspamming" end
         if State.Method == "Classic" then
@@ -1118,8 +1176,16 @@ function loadMain(isMobile)
 
     local respawnConn = player.CharacterAdded:Connect(function()
         task.wait(0.7)
-        if State.Ragebot then startMethod() end
-        if State.CSync then startCSync() end
+        if State.Ragebot and State.TimingFixer then
+            State.Ragebot = false
+            khubNotify("Timing Fixer", "Waiting for round start...")
+            task.wait(5)
+            State.Ragebot = true
+            startMethod()
+        elseif State.Ragebot then
+            startMethod()
+        end
+        
         if State.HitboxSmaller then applyHitboxSmaller(true) end
         if State.FakePosition then startFakePosition() end
         if State.FastShoot then applyFastShoot(true) end
@@ -2368,6 +2434,11 @@ function loadMain(isMobile)
         return false
     end
 
+    local KeybindToggles = {}
+    local function registerKeybind(key, flag, toggleFunc)
+        KeybindToggles[key] = { flag = flag, toggleFunc = toggleFunc }
+    end
+
     local function uiToggle(sec, o)
         local value = o.default == true
         local el = sec:toggle({ name = o.name, default = value, info = o.info, seperator = o.seperator, callback = function(state) if type(state) ~= "boolean" or state == value then return end value = state if o.callback then task.spawn(o.callback, state) end end })
@@ -2406,7 +2477,7 @@ function loadMain(isMobile)
 
     local rageSec = mainCol:section({ name = "Ragebot", default = true })
 
-    uiToggle(rageSec, {
+    local rageToggleEl = uiToggle(rageSec, {
         name = "Ragebot", default = false,
         callback = function(state)
             State.Ragebot = state
@@ -2414,6 +2485,7 @@ function loadMain(isMobile)
             else stopMethod() khubNotify("Ragebot", "OFF") end
         end,
     })
+    registerKeybind(Enum.KeyCode.R, "rage_toggle", function() trySet(rageToggleEl, not State.Ragebot) end)
 
     uiDropdown(rageSec, {
         name = "Method", flag = "rage_method",
@@ -2447,7 +2519,6 @@ function loadMain(isMobile)
         default = false, 
         callback = function(state) 
             State.CSync = state 
-            if state then startCSync() else stopCSync() end
         end 
     })
 
@@ -2470,6 +2541,31 @@ function loadMain(isMobile)
     uiSlider(rageSec, { name = "Voidspam Distance", flag = "rage_voiddist", min = 500, max = 2000000000, step = 1000000, default = State.VoidDistance, suffix = " studs", callback = function(v) State.VoidDistance = v end })
     uiSlider(rageSec, { name = "Voidspam Time", flag = "rage_voidtime", min = 0.02, max = 5, step = 0.01, default = State.VoidTime, suffix = " s", callback = function(v) State.VoidTime = v end })
     uiSlider(rageSec, { name = "Voidspam Home Time", flag = "rage_voidhome", min = 0.02, max = 5, step = 0.01, default = State.VoidHomeTime, suffix = " s", callback = function(v) State.VoidHomeTime = v end })
+
+    uiToggle(rageSec, {
+        name = "Void Kill",
+        flag = "rage_voidkill",
+        default = false,
+        callback = function(state) State.VoidKill = state end
+    })
+
+    uiToggle(rageSec, {
+        name = "Gluer",
+        flag = "rage_gluer",
+        default = false,
+        callback = function(state) State.Gluer = state end
+    })
+
+    uiToggle(rageSec, {
+        name = "Timing Fixer",
+        flag = "rage_timingfixer",
+        default = true,
+        callback = function(state) State.TimingFixer = state end
+    })
+
+    local counterSec = mainCol:section({ name = "Counters", default = true })
+    uiToggle(counterSec, { name = "Enable Counters", flag = "rage_counters", default = false, callback = function(state) State.Counters = state end })
+    uiDropdown(counterSec, { name = "Counter Type", flag = "rage_countertype", items = { "Kicia Prem", "Sleepy", "Nebu", "UE" }, default = "Kicia Prem", callback = function(choice) State.CounterType = choice end })
 
     local combatSec = mainCol:section({ name = "Combat", default = true })
     uiToggle(combatSec, { name = "Fast Shoot", flag = "fast_shoot", default = false, callback = function(state) State.FastShoot = state applyFastShoot(state) khubNotify("Fast Shoot", state and "ON (guns + melee)" or "OFF") end })
@@ -2515,7 +2611,9 @@ function loadMain(isMobile)
     local legitCol = legitTab:column({})
 
     local aimSec = legitCol:section({ name = "Aimbot", default = true })
-    lToggle(aimSec, "Aimbot", "Aimbot")
+    local aimToggleEl = lToggle(aimSec, "Aimbot", "Aimbot")
+    registerKeybind(Enum.KeyCode.P, "legit_Aimbot", function() trySet(aimToggleEl, not GS.Aimbot) end)
+    
     aimSec:label({ name = "Controls", info = "PC: hold right-click to aim. Mobile: toggle alone drives it." })
     lSlider(aimSec, "Aim FOV", "AimFov", 2, 60, 1, " deg")
     lToggle(aimSec, "Show FOV Circle", "AimShowFov")
@@ -2525,13 +2623,17 @@ function loadMain(isMobile)
     lDrop(aimSec, "Aim Bone", "AimBone", Legit.BoneNames)
 
     local silentSec = legitCol:section({ name = "Silent Aim", default = true })
-    lToggle(silentSec, "Silent Aim", "SilentAim")
+    local silentToggleEl = lToggle(silentSec, "Silent Aim", "SilentAim")
+    registerKeybind(Enum.KeyCode.B, "legit_SilentAim", function() trySet(silentToggleEl, not GS.SilentAim) end)
+
     silentSec:label({ name = "Note", info = "Guaranteed on Triggerbot/Primary Fix shots. Manual clicks are best-effort." })
     lSlider(silentSec, "Silent FOV", "SilentFov", 2, 60, 1, " deg")
     lSlider(silentSec, "Hit Chance", "SilentHitChance", 0, 100, 1, "%")
 
     local trigSec = legitCol:section({ name = "Triggerbot", default = true })
-    lToggle(trigSec, "Triggerbot", "Triggerbot")
+    local trigToggleEl = lToggle(trigSec, "Triggerbot", "Triggerbot")
+    registerKeybind(Enum.KeyCode.K, "legit_Triggerbot", function() trySet(trigToggleEl, not GS.Triggerbot) end)
+
     lSlider(trigSec, "Reaction Time", "TriggerReaction", 0, 0.5, 0.01, " s")
     lToggle(trigSec, "Team Check", "TriggerTeamCheck")
 
@@ -2714,6 +2816,14 @@ function loadMain(isMobile)
             if itemsGui then itemsGui:Destroy() end
         end)
     end
+
+    track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed or UserInputService:GetFocusedTextBox() then return end
+        local bind = KeybindToggles[input.KeyCode]
+        if bind then
+            bind.toggleFunc()
+        end
+    end))
 
     task.delay(1.5, function() khubNotify("kawaii.gg", "Loaded! RightShift toggles the menu.") end)
     pcall(function() Library:init_config(window) end)
