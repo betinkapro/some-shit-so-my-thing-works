@@ -254,50 +254,42 @@ function loadMain(isMobile)
     itemsGui.IgnoreGuiInset = true
     itemsGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 
+    -- Use UIScale instead of forcing window size to keep layout intact
     local mobileScale = Instance.new("UIScale")
     mobileScale.Parent = win
-    mobileScale.Scale = isMobile and 0.85 or 1
+    mobileScale.Scale = isMobile and 0.75 or 1
 
     local function layoutWindow()
-        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
-        local w, h
         if isMobile then
-            w = math.clamp(math.floor(vp.X * 0.9), 280, 450)
-            h = math.clamp(math.floor(vp.Y * 0.7), 300, 550)
-        else
-            w = math.clamp(math.floor(vp.X * 0.92), 320, 700)
-            h = math.clamp(math.floor(vp.Y * 0.88), 320, 720)
+            win.AnchorPoint = Vector2.new(0.5, 0.5)
+            win.Position = UDim2.fromScale(0.5, 0.5)
         end
-
-        win.AnchorPoint = Vector2.new(0, 0)
-        win.Size        = UDim2.fromOffset(w, h)
-        win.Position    = UDim2.fromOffset(math.floor((vp.X - w) / 2), math.floor((vp.Y - h) / 2))
         win.Visible = true
-        win.AutomaticSize = Enum.AutomaticSize.None
-        win.ClipsDescendants = true
     end
 
-    local function forceScroll()
+    local function applyPanels()
         for _, d in ipairs(win:GetDescendants()) do
-            if d:IsA("ScrollingFrame") then
-                d.ClipsDescendants = true
-                d.ScrollingEnabled = true
-                d.AutomaticCanvasSize = Enum.AutomaticSize.Y
-                d.ScrollBarThickness = 4
+            if d:IsA("Frame") and d.Name ~= "KawaiiBackgroundHolder" then
+                local size = d.AbsoluteSize
+                if size.X > 100 and size.Y > 100 then
+                    if d.BackgroundTransparency < 0.5 then
+                        d.BackgroundTransparency = 0.5
+                    end
+                end
             end
         end
     end
 
-    forceScroll()
-    
     win.DescendantAdded:Connect(function(d)
-        if d:IsA("ScrollingFrame") then
-            task.defer(function()
-                d.ClipsDescendants = true
-                d.ScrollingEnabled = true
-                d.AutomaticCanvasSize = Enum.AutomaticSize.Y
-                d.ScrollBarThickness = 4
-            end)
+        task.defer(applyPanels)
+    end)
+
+    task.spawn(function()
+        for i = 1, 20 do
+            if win then
+                applyPanels()
+            end
+            task.wait(0.1)
         end
     end)
 
@@ -454,7 +446,6 @@ function loadMain(isMobile)
         if workspace.CurrentCamera then
             track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
                 task.wait(0.2)
-                layoutWindow()
                 layoutImage()
             end))
         end
@@ -2477,15 +2468,23 @@ function loadMain(isMobile)
 
     local rageSec = mainCol:section({ name = "Ragebot", default = true })
 
+    local rageEnabled = false
     local rageToggleEl = uiToggle(rageSec, {
         name = "Ragebot", default = false,
         callback = function(state)
+            rageEnabled = state
             State.Ragebot = state
             if state then startMethod() khubNotify("Ragebot", "ON - " .. State.Method)
             else stopMethod() khubNotify("Ragebot", "OFF") end
         end,
     })
-    registerKeybind(Enum.KeyCode.R, "rage_toggle", function() trySet(rageToggleEl, not State.Ragebot) end)
+    registerKeybind(Enum.KeyCode.R, "rage_toggle", function()
+        rageEnabled = not rageEnabled
+        State.Ragebot = rageEnabled
+        if rageEnabled then startMethod() khubNotify("Ragebot", "ON - " .. State.Method)
+        else stopMethod() khubNotify("Ragebot", "OFF") end
+        trySet(rageToggleEl, rageEnabled)
+    end)
 
     uiDropdown(rageSec, {
         name = "Method", flag = "rage_method",
@@ -2611,8 +2610,14 @@ function loadMain(isMobile)
     local legitCol = legitTab:column({})
 
     local aimSec = legitCol:section({ name = "Aimbot", default = true })
-    local aimToggleEl = lToggle(aimSec, "Aimbot", "Aimbot")
-    registerKeybind(Enum.KeyCode.P, "legit_Aimbot", function() trySet(aimToggleEl, not GS.Aimbot) end)
+    local aimEnabled = false
+    local aimToggleEl = uiToggle(aimSec, { name = "Aimbot", flag = "legit_Aimbot", default = false, callback = function(state) aimEnabled = state GS.Aimbot = state Legit.Update() end })
+    registerKeybind(Enum.KeyCode.P, "legit_Aimbot", function()
+        aimEnabled = not aimEnabled
+        GS.Aimbot = aimEnabled
+        Legit.Update()
+        trySet(aimToggleEl, aimEnabled)
+    end)
     
     aimSec:label({ name = "Controls", info = "PC: hold right-click to aim. Mobile: toggle alone drives it." })
     lSlider(aimSec, "Aim FOV", "AimFov", 2, 60, 1, " deg")
@@ -2623,16 +2628,28 @@ function loadMain(isMobile)
     lDrop(aimSec, "Aim Bone", "AimBone", Legit.BoneNames)
 
     local silentSec = legitCol:section({ name = "Silent Aim", default = true })
-    local silentToggleEl = lToggle(silentSec, "Silent Aim", "SilentAim")
-    registerKeybind(Enum.KeyCode.B, "legit_SilentAim", function() trySet(silentToggleEl, not GS.SilentAim) end)
+    local silentEnabled = false
+    local silentToggleEl = uiToggle(silentSec, { name = "Silent Aim", flag = "legit_SilentAim", default = false, callback = function(state) silentEnabled = state GS.SilentAim = state Legit.Update() end })
+    registerKeybind(Enum.KeyCode.B, "legit_SilentAim", function()
+        silentEnabled = not silentEnabled
+        GS.SilentAim = silentEnabled
+        Legit.Update()
+        trySet(silentToggleEl, silentEnabled)
+    end)
 
     silentSec:label({ name = "Note", info = "Guaranteed on Triggerbot/Primary Fix shots. Manual clicks are best-effort." })
     lSlider(silentSec, "Silent FOV", "SilentFov", 2, 60, 1, " deg")
     lSlider(silentSec, "Hit Chance", "SilentHitChance", 0, 100, 1, "%")
 
     local trigSec = legitCol:section({ name = "Triggerbot", default = true })
-    local trigToggleEl = lToggle(trigSec, "Triggerbot", "Triggerbot")
-    registerKeybind(Enum.KeyCode.K, "legit_Triggerbot", function() trySet(trigToggleEl, not GS.Triggerbot) end)
+    local trigEnabled = false
+    local trigToggleEl = uiToggle(trigSec, { name = "Triggerbot", flag = "legit_Triggerbot", default = false, callback = function(state) trigEnabled = state GS.Triggerbot = state Legit.Update() end })
+    registerKeybind(Enum.KeyCode.K, "legit_Triggerbot", function()
+        trigEnabled = not trigEnabled
+        GS.Triggerbot = trigEnabled
+        Legit.Update()
+        trySet(trigToggleEl, trigEnabled)
+    end)
 
     lSlider(trigSec, "Reaction Time", "TriggerReaction", 0, 0.5, 0.01, " s")
     lToggle(trigSec, "Team Check", "TriggerTeamCheck")
