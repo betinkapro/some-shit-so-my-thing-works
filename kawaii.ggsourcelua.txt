@@ -254,7 +254,6 @@ function loadMain(isMobile)
     itemsGui.IgnoreGuiInset = true
     itemsGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 
-    -- Use UIScale instead of forcing window size to keep layout intact
     local mobileScale = Instance.new("UIScale")
     mobileScale.Parent = win
     mobileScale.Scale = isMobile and 0.75 or 1
@@ -280,15 +279,13 @@ function loadMain(isMobile)
         end
     end
 
-    win.DescendantAdded:Connect(function(d)
+    win.DescendantAdded:Connect(function()
         task.defer(applyPanels)
     end)
 
     task.spawn(function()
         for i = 1, 20 do
-            if win then
-                applyPanels()
-            end
+            if win then applyPanels() end
             task.wait(0.1)
         end
     end)
@@ -544,6 +541,7 @@ function loadMain(isMobile)
     local fakeConn = nil
     local fakeOffsetY = 12
     local lastGlobalClick = 0
+    local lastNetworkClaim = 0
 
     local function getCharacter() return player.Character end
     local function getRoot(char) return char and char:FindFirstChild("HumanoidRootPart") end
@@ -558,6 +556,8 @@ function loadMain(isMobile)
 
     local function claimOwnership(root)
         if not root then return end
+        if os.clock() - lastNetworkClaim < 0.5 then return end
+        lastNetworkClaim = os.clock()
         pcall(function() if not root.Anchored then root:SetNetworkOwner(player) end end)
     end
 
@@ -1905,13 +1905,12 @@ function loadMain(isMobile)
             if M.Enabled then return end
             M.Enabled = true
             task.spawn(function()
-                local stallStart = os.clock()
+                -- FIX: Replaced CPU spin loop with task.wait to prevent mobile freeze
                 local stallDur = 5 + math.random() * 0.6
-                repeat until os.clock() - stallStart >= stallDur
+                task.wait(stallDur)
                 for i = 1, 12 do
                     coroutine.wrap(function()
-                        local s = os.clock()
-                        repeat until os.clock() - s >= 0.1
+                        task.wait(0.1)
                     end)()
                 end
                 
